@@ -6,13 +6,22 @@ import { supabase } from '@/lib/supabase';
 import { BottomNav } from '@/components/bottom-nav';
 import { 
   ArrowLeft, Calendar, MapPin, Users, Trash2, Edit3, 
-  User, Zap, Eye, EyeOff, X 
+  User, Zap, Eye, EyeOff, X, Download
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 
-// 여순광 픽업게임 실제 9인제 배구 포지션 리스트
-const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백", "상관없음"];
+const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
+const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
+
+// 포지션 이름을 줄여주는 마법의 함수 (예: 레프트 -> 레, 레프트백 -> 레백)
+const getShortPos = (pos: string) => {
+  const map: Record<string, string> = { 
+    '레프트':'레', '속공':'속', '세터':'세', '라이트':'라', '앞차':'앞', 
+    '백차':'백', '레프트백':'레백', '센터백':'센백', '라이트백':'라백' 
+  };
+  return map[pos] || pos;
+};
 
 export default function MatchDetailPage() {
   const router = useRouter();
@@ -22,24 +31,37 @@ export default function MatchDetailPage() {
   const [match, setMatch] = useState<any | null>(null);
   const [participants, setParticipants] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<any>(null); // 내 프로필 정보 저장용
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('info');
+  
+  // 모달 및 신청 폼 상태
   const [showPositionModal, setShowPositionModal] = useState(false);
-  const [selectedPosition, setSelectedPosition] = useState('');
+  const [joinForm, setJoinForm] = useState({
+    pos_1st: '레프트',
+    pos_2nd: '선택 안함',
+    pos_3rd: '선택 안함',
+    pos_exclude: '선택 안함'
+  });
 
-  // 1. 데이터 불러오기 (매치 정보 + 참여자 명단)
+  // 1. 데이터 불러오기 (매치 정보 + 참여자 명단 + 내 프로필)
   const fetchMatchDetails = useCallback(async () => {
     try {
       setLoading(true);
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       setUser(currentUser);
 
+      // 내 프로필 정보 가져오기 (불러오기 버튼을 위해)
+      if (currentUser) {
+        const { data: profileData } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
+        setUserProfile(profileData);
+      }
+
       const { data: matchData } = await supabase.from('matches').select('*').eq('id', matchId).single();
       setMatch(matchData);
 
-      // profiles 테이블에서 full_name과 avatar_url(카카오 프로필 사진 주소)을 함께 가져옵니다.
       const { data: partData } = await supabase.from('match_participants')
-        .select('*, profiles(full_name, avatar_url)')
+        .select('*, profiles(full_name, avatar_url, skill_level)')
         .eq('match_id', matchId);
       setParticipants(partData || []);
     } catch (error) {
@@ -56,17 +78,15 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // 2. 관리자 기능: 매치 삭제 (에러 추적 및 강력 새로고침 기능 유지)
+  // 2. 관리자 기능: 매치 삭제 (기존 유지)
   const deleteMatch = async () => {
     if (!confirm('정말로 이 매치를 삭제하시겠습니까? 삭제 후에는 복구할 수 없습니다.')) return;
     try {
       const { error } = await supabase.from('matches').delete().eq('id', matchId);
-      
       if (error) {
         alert(`❌ DB 삭제 실패: ${error.message} (코드: ${error.code})`);
         return;
       }
-      
       alert('매치가 성공적으로 삭제되었습니다. 🏐');
       window.location.href = '/'; 
     } catch (error: any) {
@@ -74,13 +94,16 @@ export default function MatchDetailPage() {
     }
   };
 
-  // 3. 참여 신청 및 취소 로직
-  async function submitJoin(position: string = '') {
+  // 3. 참여 신청 및 취소 로직 (1~3순위 저장으로 업그레이드)
+  async function submitJoin() {
     try {
       const { error } = await supabase.from('match_participants').insert([{ 
         match_id: matchId, 
         user_id: user.id,
-        position: position 
+        pos_1st: joinForm.pos_1st,
+        pos_2nd: joinForm.pos_2nd,
+        pos_3rd: joinForm.pos_3rd,
+        pos_exclude: joinForm.pos_exclude
       }]);
       if (error) throw error;
       
@@ -103,45 +126,57 @@ export default function MatchDetailPage() {
       }
     } else {
       if (match.recruitment_type === '알고리즘') setShowPositionModal(true);
-      else submitJoin();
+      else submitJoin(); // 선착순일 경우 기존처럼 바로 신청
     }
   };
 
-  // 4. 라인업 생성 알고리즘 (파이썬 스네이크 드래프트 로직 유지)
+  // [추가] 프로필에서 포지션 불러오기 기능
+  const loadProfilePositions = () => {
+    if (!userProfile?.preferred_position) {
+      alert('프로필에 설정된 배구 포지션이 없습니다. 프로필에서 먼저 설정해주세요.');
+      return;
+    }
+    // "세터,레프트" 형태로 저장된 문자열을 배열로 변환
+    const posArray = userProfile.preferred_position.split(',');
+    
+    setJoinForm({
+      pos_1st: posArray[0] || '레프트',
+      pos_2nd: posArray[1] || '선택 안함',
+      pos_3rd: posArray[2] || '선택 안함',
+      pos_exclude: '선택 안함'
+    });
+    alert('프로필에 설정한 포지션을 불러왔습니다!');
+  };
+
+  // 4. 라인업 생성 알고리즘 (일단 1순위 포지션 기반으로 임시 연동)
   const generateLineup = async () => {
     if (!confirm('새로운 라인업을 자동 생성하시겠습니까?')) return;
     
-    // 실력 점수(랜덤 가중치 포함) 기준 정렬
-    let players = [...participants].map(p => ({ ...p, score: 50 + Math.random() * 10 }))
-                                   .sort((a, b) => b.score - a.score);
+    let players = [...participants].map(p => ({ ...p, score: 50 + Math.random() * 10 })).sort((a, b) => b.score - a.score);
 
-    // 1~4라운드(총 8세트분) 생성
     for (let r = 1; r <= 4; r++) {
       let teamA: any[] = [];
       let teamB: any[] = [];
       
-      // 스네이크 드래프트 분배
       players.forEach((p, idx) => {
         if ((idx % 4 === 0) || (idx % 4 === 3)) teamA.push(p);
         else teamB.push(p);
       });
 
       const assignPos = (team: any[]) => {
-        let available = [...VOLLEYBALL_POSITIONS].filter(p => p !== "상관없음");
+        let available = [...VOLLEYBALL_POSITIONS];
         return team.map(p => {
-          let pos = p.position !== "상관없음" && available.includes(p.position) ? p.position : (available.shift() || '대기');
+          // 우선 1순위 포지션을 배정 시도합니다.
+          let pos = available.includes(p.pos_1st) ? p.pos_1st : (available.shift() || '대기');
           available = available.filter(v => v !== pos);
           return { id: p.id, pos };
         });
       };
 
-      const results = [...assignPos(teamA).map(res => ({...res, team: 'A팀'})), 
-                       ...assignPos(teamB).map(res => ({...res, team: 'B팀'}))];
+      const results = [...assignPos(teamA).map(res => ({...res, team: 'A팀'})), ...assignPos(teamB).map(res => ({...res, team: 'B팀'}))];
       
       for (const res of results) {
-        await supabase.from('match_participants')
-          .update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos })
-          .eq('id', res.id);
+        await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id);
       }
     }
     alert('여순광 배구 라인업 생성 완료!');
@@ -153,7 +188,6 @@ export default function MatchDetailPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-44">
-      {/* 헤더: 뒤로가기, 제목, 관리기능(눈, 수정, 삭제) */}
       <header className="bg-white border-b sticky top-0 z-20 flex p-4 max-w-lg mx-auto justify-between items-center">
         <div className="flex items-center gap-2">
           <button onClick={() => router.back()}><ArrowLeft /></button>
@@ -170,7 +204,6 @@ export default function MatchDetailPage() {
         )}
       </header>
 
-      {/* 상단 탭 */}
       <div className="bg-white border-b sticky top-14 z-20">
         <div className="flex max-w-lg mx-auto">
           <button onClick={() => setActiveTab('info')} className={`flex-1 py-4 font-bold ${activeTab === 'info' ? 'border-b-4 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>정보</button>
@@ -197,28 +230,31 @@ export default function MatchDetailPage() {
             )}
 
             <div>
-              <h3 className="font-black text-lg mb-4 px-1">참여자 명단</h3>
-              <div className="grid grid-cols-2 gap-3">
-                {participants.map((p, idx) => (
-                  <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border shadow-sm">
-                    {/* 👇 카카오 프로필 사진이 있으면 보여주고, 없으면 기본 아이콘을 보여주는 마법의 로직입니다 */}
-                    {p.profiles?.avatar_url ? (
-                      <img 
-                        src={p.profiles.avatar_url} 
-                        alt="프로필 사진" 
-                        className="w-10 h-10 rounded-full object-cover border border-gray-100 shrink-0" 
-                      />
-                    ) : (
-                      <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center shrink-0">
-                        <User className="text-sport-blue w-5 h-5"/>
+              <h3 className="font-black text-lg mb-4 px-1">신청자 명단 ({participants.length}명)</h3>
+              <div className="grid grid-cols-1 gap-3">
+                {participants.map((p, idx) => {
+                  // 옛날 앱처럼 포지션 압축 텍스트 생성 (예: 레-앞-속)
+                  const posList = [p.pos_1st, p.pos_2nd, p.pos_3rd].filter(x => x && x !== '선택 안함');
+                  const shortPosText = posList.map(getShortPos).join('-');
+
+                  return (
+                    <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border shadow-sm">
+                      {p.profiles?.avatar_url ? (
+                        <img src={p.profiles.avatar_url} alt="프로필" className="w-10 h-10 rounded-full object-cover border border-gray-100 shrink-0" />
+                      ) : (
+                        <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center shrink-0">
+                          <User className="text-sport-blue w-5 h-5"/>
+                        </div>
+                      )}
+                      <div className="flex-1 overflow-hidden">
+                        <p className="text-sm font-bold truncate">{p.profiles?.full_name}</p>
+                        <p className="text-xs text-gray-500 font-medium">
+                          {p.profiles?.skill_level || '입문'} <span className="text-gray-300">·</span> <span className="text-sport-blue font-bold">{shortPosText || '미지정'}</span>
+                        </p>
                       </div>
-                    )}
-                    <div className="overflow-hidden">
-                      <p className="text-sm font-bold truncate">{p.profiles?.full_name}</p>
-                      <p className="text-[10px] text-sport-green font-bold uppercase tracking-widest">{p.position || 'PLAYER'}</p>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </>
@@ -252,28 +288,66 @@ export default function MatchDetailPage() {
         )}
       </main>
 
-      {/* 포지션 선택 모달 */}
+      {/* --- 업그레이드된 참가 신청 모달 (1~3순위 및 프로필 불러오기) --- */}
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center backdrop-blur-sm">
-          <div className="bg-white w-full max-w-lg rounded-t-[40px] p-8">
-            <div className="flex items-center justify-between mb-8">
-              <h3 className="text-2xl font-black">주 포지션 선택</h3>
+          <div className="bg-white w-full max-w-lg rounded-t-[40px] p-6 pb-10 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-2xl font-black">포지션 희망서</h3>
               <button onClick={() => setShowPositionModal(false)}><X className="w-8 h-8 text-gray-300"/></button>
             </div>
-            <div className="grid grid-cols-3 gap-3 mb-8">
-              {VOLLEYBALL_POSITIONS.map((pos) => (
-                <button
-                  key={pos}
-                  onClick={() => setSelectedPosition(pos)}
-                  className={`py-4 rounded-2xl font-bold text-sm transition-all border-2 ${
-                    selectedPosition === pos ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-50 bg-gray-50 text-gray-500'
-                  }`}
-                >
-                  {pos}
-                </button>
-              ))}
+
+            <div className="bg-blue-50 p-4 rounded-2xl mb-6">
+              <p className="text-xs font-bold text-sport-blue leading-relaxed">
+                💡 2순위와 3순위(수비/속공)까지 꽉 채워주셔야 희망 포지션 배정 확률이 높아지고, 알고리즘 가산점(+)도 챙길 수 있습니다!
+              </p>
             </div>
-            <button onClick={() => submitJoin(selectedPosition)} disabled={!selectedPosition} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black text-xl shadow-xl disabled:bg-gray-200">신청 완료</button>
+
+            <button 
+              onClick={loadProfilePositions}
+              className="w-full mb-6 py-3 border-2 border-sport-blue text-sport-blue rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-50 transition-colors"
+            >
+              <Download className="w-4 h-4" /> 내 프로필 포지션 불러오기
+            </button>
+
+            <div className="space-y-4 mb-8">
+              <div>
+                <label className="text-sm font-black text-gray-700 ml-1">1순위 (필수)</label>
+                <select className="w-full mt-1 p-4 rounded-2xl border-2 border-gray-100 font-bold outline-none focus:border-sport-blue bg-white"
+                  value={joinForm.pos_1st} onChange={(e) => setJoinForm({...joinForm, pos_1st: e.target.value})}>
+                  {VOLLEYBALL_POSITIONS.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                </select>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-black text-gray-700 ml-1">2순위 (차선책)</label>
+                  <select className="w-full mt-1 p-4 rounded-2xl border-2 border-gray-100 font-bold outline-none focus:border-sport-blue bg-white"
+                    value={joinForm.pos_2nd} onChange={(e) => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
+                    {OPTIONAL_POSITIONS.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-black text-gray-700 ml-1">3순위 <span className="text-sport-green">(가산점+)</span></label>
+                  <select className="w-full mt-1 p-4 rounded-2xl border-2 border-gray-100 font-bold outline-none focus:border-sport-blue bg-white"
+                    value={joinForm.pos_3rd} onChange={(e) => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
+                    {OPTIONAL_POSITIONS.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-gray-100">
+                <label className="text-sm font-black text-red-400 ml-1">제외할 포지션 (선택)</label>
+                <select className="w-full mt-1 p-4 rounded-2xl border-2 border-red-50 text-red-500 font-bold outline-none focus:border-red-400 bg-white"
+                  value={joinForm.pos_exclude} onChange={(e) => setJoinForm({...joinForm, pos_exclude: e.target.value})}>
+                  {OPTIONAL_POSITIONS.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <button onClick={submitJoin} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black text-xl shadow-xl active:scale-95 transition-transform">
+              신청 완료
+            </button>
           </div>
         </div>
       )}
