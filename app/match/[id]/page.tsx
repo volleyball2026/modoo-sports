@@ -55,24 +55,23 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // 2. 관리자 기능: 매치 삭제
+  // 2. 관리자 기능: 매치 삭제 (에러 추적 강화)
   const deleteMatch = async () => {
-    if (!confirm('정말로 이 매치를 삭제하시겠습니까?')) return;
+    if (!confirm('정말로 이 매치를 삭제하시겠습니까? 삭제 후에는 복구할 수 없습니다.')) return;
     try {
       const { error } = await supabase.from('matches').delete().eq('id', matchId);
-      if (error) throw error;
       
-      alert('매치가 삭제되었습니다.');
+      // 에러가 있으면 여기서 정확한 이유를 알림창으로 띄워줍니다.
+      if (error) {
+        alert(`❌ DB 삭제 실패: ${error.message} (코드: ${error.code})`);
+        return;
+      }
       
-      // 1. 메인 화면으로 이동
-      router.push('/');
-      window.location.href = '/'; // [강력 추천] 확실하게 홈으로 보내면서 전체 새로고침을 실행합니다.
-      
-      // 2. [추가] 목록 화면을 강제로 새로고침해서 삭제된 데이터를 반영합니다.
-      router.refresh(); 
-      
-    } catch (error) {
-      alert('삭제 중 오류가 발생했습니다.');
+      alert('매치가 성공적으로 삭제되었습니다. 🏐');
+      // 캐시를 완전히 무시하고 메인 화면으로 강제 이동 및 새로고침
+      window.location.href = '/'; 
+    } catch (error: any) {
+      alert(`❌ 코드 실행 실패: ${error.message}`);
     }
   };
 
