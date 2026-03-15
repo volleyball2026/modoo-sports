@@ -6,15 +6,16 @@ import { supabase } from '@/lib/supabase';
 import { BottomNav } from '@/components/bottom-nav';
 import { 
   ArrowLeft, Calendar, MapPin, Users, Trash2, Edit3, 
-  User, Zap, Eye, EyeOff, X, Download
+  User, Zap, Eye, EyeOff, X, Download, BarChart3
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 
-const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
+const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백", "상관없음"];
+const REAL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"]; // 통계용 (상관없음 제외)
 const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
 
-// 포지션 이름을 줄여주는 마법의 함수 (예: 레프트 -> 레, 레프트백 -> 레백)
+// 포지션 이름을 줄여주는 마법의 함수
 const getShortPos = (pos: string) => {
   const map: Record<string, string> = { 
     '레프트':'레', '속공':'속', '세터':'세', '라이트':'라', '앞차':'앞', 
@@ -31,11 +32,10 @@ export default function MatchDetailPage() {
   const [match, setMatch] = useState<any | null>(null);
   const [participants, setParticipants] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<any>(null); // 내 프로필 정보 저장용
+  const [userProfile, setUserProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('info');
   
-  // 모달 및 신청 폼 상태
   const [showPositionModal, setShowPositionModal] = useState(false);
   const [joinForm, setJoinForm] = useState({
     pos_1st: '레프트',
@@ -44,14 +44,12 @@ export default function MatchDetailPage() {
     pos_exclude: '선택 안함'
   });
 
-  // 1. 데이터 불러오기 (매치 정보 + 참여자 명단 + 내 프로필)
   const fetchMatchDetails = useCallback(async () => {
     try {
       setLoading(true);
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       setUser(currentUser);
 
-      // 내 프로필 정보 가져오기 (불러오기 버튼을 위해)
       if (currentUser) {
         const { data: profileData } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
         setUserProfile(profileData);
@@ -78,7 +76,6 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // 2. 관리자 기능: 매치 삭제 (기존 유지)
   const deleteMatch = async () => {
     if (!confirm('정말로 이 매치를 삭제하시겠습니까? 삭제 후에는 복구할 수 없습니다.')) return;
     try {
@@ -94,7 +91,6 @@ export default function MatchDetailPage() {
     }
   };
 
-  // 3. 참여 신청 및 취소 로직 (1~3순위 저장으로 업그레이드)
   async function submitJoin() {
     try {
       const { error } = await supabase.from('match_participants').insert([{ 
@@ -126,19 +122,16 @@ export default function MatchDetailPage() {
       }
     } else {
       if (match.recruitment_type === '알고리즘') setShowPositionModal(true);
-      else submitJoin(); // 선착순일 경우 기존처럼 바로 신청
+      else submitJoin();
     }
   };
 
-  // [추가] 프로필에서 포지션 불러오기 기능
   const loadProfilePositions = () => {
     if (!userProfile?.preferred_position) {
       alert('프로필에 설정된 배구 포지션이 없습니다. 프로필에서 먼저 설정해주세요.');
       return;
     }
-    // "세터,레프트" 형태로 저장된 문자열을 배열로 변환
     const posArray = userProfile.preferred_position.split(',');
-    
     setJoinForm({
       pos_1st: posArray[0] || '레프트',
       pos_2nd: posArray[1] || '선택 안함',
@@ -148,7 +141,6 @@ export default function MatchDetailPage() {
     alert('프로필에 설정한 포지션을 불러왔습니다!');
   };
 
-  // 4. 라인업 생성 알고리즘 (일단 1순위 포지션 기반으로 임시 연동)
   const generateLineup = async () => {
     if (!confirm('새로운 라인업을 자동 생성하시겠습니까?')) return;
     
@@ -166,7 +158,6 @@ export default function MatchDetailPage() {
       const assignPos = (team: any[]) => {
         let available = [...VOLLEYBALL_POSITIONS];
         return team.map(p => {
-          // 우선 1순위 포지션을 배정 시도합니다.
           let pos = available.includes(p.pos_1st) ? p.pos_1st : (available.shift() || '대기');
           available = available.filter(v => v !== pos);
           return { id: p.id, pos };
@@ -182,6 +173,29 @@ export default function MatchDetailPage() {
     alert('여순광 배구 라인업 생성 완료!');
     fetchMatchDetails();
   };
+
+  // [추가] 실시간 포지션 통계 계산 로직
+  // (총 정원을 9로 나누어 포지션당 적정 인원(capacity)을 계산합니다.)
+  const capacityPerPos = Math.max(1, Math.round((match?.max_participants || 18) / 9));
+  
+  const positionStats = REAL_POSITIONS.map(pos => {
+    const count1st = participants.filter(p => p.pos_1st === pos).length;
+    const count2nd = participants.filter(p => p.pos_2nd === pos).length;
+    const count3rd = participants.filter(p => p.pos_3rd === pos).length;
+
+    let status = '여유';
+    let statusClass = 'bg-green-50 text-sport-green border-green-100';
+
+    if (count1st === 0) {
+      status = '빈집';
+      statusClass = 'bg-blue-50 text-blue-500 border-blue-100';
+    } else if (count1st >= capacityPerPos) {
+      status = '포화';
+      statusClass = 'bg-red-50 text-red-500 border-red-100';
+    }
+
+    return { pos, count1st, count2nd, count3rd, status, statusClass };
+  });
 
   if (loading) return <div className="p-10 text-center font-bold text-sport-blue">데이터 로딩 중...</div>;
   if (!match) return <div className="p-10 text-center">매치를 찾을 수 없습니다.</div>;
@@ -229,11 +243,36 @@ export default function MatchDetailPage() {
               </button>
             )}
 
+            {/* --- [추가] 📊 실시간 포지션 신청 현황판 --- */}
+            {match.recruitment_type === '알고리즘' && (
+              <div>
+                <h3 className="font-black text-lg mb-4 px-1 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-sport-blue" /> 실시간 포지션 경쟁률
+                </h3>
+                <div className="grid grid-cols-3 gap-2">
+                  {positionStats.map((stat, idx) => (
+                    <div key={idx} className="bg-white p-3 rounded-2xl border shadow-sm flex flex-col items-center justify-center">
+                      <div className="flex items-center gap-1 mb-1">
+                        <span className="font-bold text-xs text-gray-700">{stat.pos}</span>
+                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border ${stat.statusClass}`}>
+                          {stat.status}
+                        </span>
+                      </div>
+                      <p className="text-xl font-black text-gray-900 mb-1">{stat.count1st}<span className="text-xs text-gray-400 ml-0.5">명</span></p>
+                      <div className="w-full flex justify-between text-[10px] text-gray-400 font-bold px-1">
+                        <span>2순위 <span className="text-gray-600">{stat.count2nd}</span></span>
+                        <span>3순위 <span className="text-gray-600">{stat.count3rd}</span></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div>
               <h3 className="font-black text-lg mb-4 px-1">신청자 명단 ({participants.length}명)</h3>
               <div className="grid grid-cols-1 gap-3">
                 {participants.map((p, idx) => {
-                  // 옛날 앱처럼 포지션 압축 텍스트 생성 (예: 레-앞-속)
                   const posList = [p.pos_1st, p.pos_2nd, p.pos_3rd].filter(x => x && x !== '선택 안함');
                   const shortPosText = posList.map(getShortPos).join('-');
 
@@ -288,7 +327,7 @@ export default function MatchDetailPage() {
         )}
       </main>
 
-      {/* --- 업그레이드된 참가 신청 모달 (1~3순위 및 프로필 불러오기) --- */}
+      {/* 참가 신청 모달 */}
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center backdrop-blur-sm">
           <div className="bg-white w-full max-w-lg rounded-t-[40px] p-6 pb-10 max-h-[85vh] overflow-y-auto">
@@ -352,7 +391,6 @@ export default function MatchDetailPage() {
         </div>
       )}
 
-      {/* 하단 참가 버튼 */}
       <div className="fixed bottom-20 left-0 right-0 p-4 max-w-lg mx-auto z-10 bg-gradient-to-t from-gray-50 pt-10">
         <button onClick={handleJoinToggle} className={`w-full py-5 rounded-2xl font-black text-xl shadow-2xl transition-all active:scale-95 ${isJoined ? 'bg-gray-200 text-gray-500' : 'bg-sport-blue text-white'}`}>
           {isJoined ? '참여 취소하기' : '지금 참가 신청하기'}
