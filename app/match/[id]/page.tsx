@@ -66,6 +66,7 @@ export default function MatchDetailPage() {
       
       // 1. 메인 화면으로 이동
       router.push('/');
+      window.location.href = '/'; // [강력 추천] 확실하게 홈으로 보내면서 전체 새로고침을 실행합니다.
       
       // 2. [추가] 목록 화면을 강제로 새로고침해서 삭제된 데이터를 반영합니다.
       router.refresh(); 
