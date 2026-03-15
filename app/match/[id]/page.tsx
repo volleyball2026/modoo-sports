@@ -14,7 +14,7 @@ import { ko } from 'date-fns/locale';
 const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백", "상관없음"];
 const REAL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
 const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
-// [수정] 3순위 가산점 전용 포지션 제한
+// 3순위 가산점 전용 포지션 제한
 const BONUS_POSITIONS = ["선택 안함", "속공", "레프트백", "센터백", "라이트백"];
 
 const getShortPos = (pos: string) => {
@@ -43,7 +43,6 @@ export default function MatchDetailPage() {
   const [activeTab, setActiveTab] = useState('info');
   
   const [showPositionModal, setShowPositionModal] = useState(false);
-  // [수정] 세트 선택 상태 추가
   const [joinForm, setJoinForm] = useState({
     pos_1st: '레프트',
     pos_2nd: '선택 안함',
@@ -96,7 +95,6 @@ export default function MatchDetailPage() {
     }
   };
 
-  // [수정] 신청 및 수정 로직 통합
   async function submitJoin() {
     if (joinForm.available_sets.length === 0) {
       alert('최소 1개 이상의 세트를 선택해 주세요.');
@@ -115,13 +113,11 @@ export default function MatchDetailPage() {
       };
 
       if (isJoined) {
-        // 기존 참가자면 수정 (Update)
         const myData = participants.find(p => p.user_id === user.id);
         const { error } = await supabase.from('match_participants').update(payload).eq('id', myData.id);
         if (error) throw error;
         alert('신청 내용이 수정되었습니다! 🏐');
       } else {
-        // 새 참가자면 생성 (Insert)
         const { error } = await supabase.from('match_participants').insert([payload]);
         if (error) throw error;
         alert('참가 신청 완료! 🏐');
@@ -134,7 +130,6 @@ export default function MatchDetailPage() {
     }
   }
 
-  // [수정] 모달 열기 함수 (수정 모드 지원)
   const openJoinModal = () => {
     if (!user) { alert('로그인이 필요합니다.'); router.push('/login'); return; }
 
@@ -167,20 +162,22 @@ export default function MatchDetailPage() {
     }
   };
 
+  // [수정] 프로필 포지션 불러오기 로직 (주 포지션 2개만 불러옴)
   const loadProfilePositions = () => {
     if (!userProfile?.preferred_position) {
       alert('프로필에 설정된 배구 포지션이 없습니다.');
       return;
     }
+    // 프로필에 저장된 2개 포지션 배열 (예: ["세터", "레프트"])
     const posArray = userProfile.preferred_position.split(',');
+    
     setJoinForm({
       ...joinForm,
       pos_1st: posArray[0] || '레프트',
       pos_2nd: posArray[1] || '선택 안함',
-      // 3순위가 보너스 포지션 목록에 없으면 '선택 안함' 처리
-      pos_3rd: BONUS_POSITIONS.includes(posArray[2]) ? posArray[2] : '선택 안함',
+      pos_3rd: '선택 안함' // 3순위는 가산점용이므로 직접 선택하도록 비워둠
     });
-    alert('프로필 포지션을 불러왔습니다!');
+    alert('프로필의 주 포지션 2개를 불러왔습니다! 3순위(가산점)를 선택해 보세요.');
   };
 
   const generateLineup = async () => {
@@ -327,7 +324,6 @@ export default function MatchDetailPage() {
                 {participants.map((p, idx) => {
                   const posList = [p.pos_1st, p.pos_2nd, p.pos_3rd].filter(x => x && x !== '선택 안함');
                   const shortPosText = posList.map(getShortPos).join('-');
-                  // [수정] 참여자가 선택한 세트 텍스트
                   const setsText = p.available_sets ? `${p.available_sets}세트 참여` : '전체 참여';
 
                   return (
@@ -384,49 +380,34 @@ export default function MatchDetailPage() {
         )}
       </main>
 
-      {/* --- [수정] 중앙 정렬된 모달 & 세트 다중 선택 기능 포함 --- */}
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-          <div className="bg-white w-full max-w-lg rounded-[32px] p-6 max-h-[85vh] overflow-y-auto custom-scrollbar">
+          <div className="bg-white w-full max-w-lg rounded-[32px] p-6 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-2xl font-black">{isJoined ? '신청 내용 수정' : '포지션 희망서'}</h3>
               <button onClick={() => setShowPositionModal(false)}><X className="w-8 h-8 text-gray-300"/></button>
             </div>
 
-            <div className="bg-blue-50 p-4 rounded-2xl mb-6">
-              <p className="text-xs font-bold text-sport-blue leading-relaxed">
-                💡 2순위와 3순위(수비/속공)까지 꽉 채워주셔야 희망 포지션 배정 확률이 높아지고, 알고리즘 가산점(+)도 챙길 수 있습니다!
-              </p>
+            <div className="bg-blue-50 p-4 rounded-2xl mb-6 text-xs font-bold text-sport-blue leading-relaxed">
+              💡 2순위와 3순위(수비/속공)까지 꽉 채워주셔야 희망 배정 확률이 높아지고, 가산점(+)도 챙길 수 있습니다!
             </div>
 
-            <button 
-              onClick={loadProfilePositions}
-              className="w-full mb-6 py-3 border-2 border-sport-blue text-sport-blue rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-50 transition-colors"
-            >
+            <button onClick={loadProfilePositions} className="w-full mb-6 py-3 border-2 border-sport-blue text-sport-blue rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-50">
               <Download className="w-4 h-4" /> 내 프로필 포지션 불러오기
             </button>
 
             <div className="space-y-5 mb-8">
-              {/* 참가 가능 세트 선택 영역 */}
               <div className="pb-5 border-b border-gray-100">
-                <label className="text-sm font-black text-gray-900 ml-1 flex items-center gap-2 mb-3">
-                  <Clock className="w-4 h-4 text-sport-blue"/> 참가 가능 세트 (다중 선택)
-                </label>
+                <label className="text-sm font-black text-gray-900 ml-1 flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-sport-blue"/> 참가 가능 세트</label>
                 <div className="flex flex-wrap gap-2">
                   {Array.from({length: match?.total_sets || 4}, (_, i) => i + 1).map(setNum => {
                     const isSelected = joinForm.available_sets.includes(setNum);
                     return (
-                      <button
-                        key={setNum}
-                        onClick={() => {
-                          const curr = joinForm.available_sets;
-                          if (isSelected) setJoinForm({...joinForm, available_sets: curr.filter(n => n !== setNum)});
-                          else setJoinForm({...joinForm, available_sets: [...curr, setNum]});
-                        }}
-                        className={`px-4 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${isSelected ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100 bg-white text-gray-400'}`}
-                      >
-                        {setNum}세트
-                      </button>
+                      <button key={setNum} onClick={() => {
+                        const curr = joinForm.available_sets;
+                        if (isSelected) setJoinForm({...joinForm, available_sets: curr.filter(n => n !== setNum)});
+                        else setJoinForm({...joinForm, available_sets: [...curr, setNum]});
+                      }} className={`px-4 py-2.5 rounded-xl font-bold text-sm border-2 ${isSelected ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100 bg-white text-gray-400'}`}>{setNum}세트</button>
                     );
                   })}
                 </div>
@@ -452,7 +433,6 @@ export default function MatchDetailPage() {
                   <label className="text-sm font-black text-gray-700 ml-1">3순위 <span className="text-sport-green">(가산점+)</span></label>
                   <select className="w-full mt-1 p-4 rounded-2xl border-2 border-gray-100 font-bold outline-none focus:border-sport-blue bg-white"
                     value={joinForm.pos_3rd} onChange={(e) => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
-                    {/* [수정] 3순위는 BONUS_POSITIONS(속공, 수비 등)로 제한됨 */}
                     {BONUS_POSITIONS.map(pos => <option key={pos} value={pos}>{pos}</option>)}
                   </select>
                 </div>
@@ -474,21 +454,14 @@ export default function MatchDetailPage() {
         </div>
       )}
 
-      {/* --- [수정] 하단 고정 버튼 바 (수정 & 취소 분리) --- */}
       <div className="fixed bottom-20 left-0 right-0 p-4 max-w-lg mx-auto z-10 bg-gradient-to-t from-gray-50 pt-10">
         {isJoined ? (
           <div className="flex gap-2">
-            <button onClick={handleCancelJoin} className="flex-1 py-5 rounded-2xl font-black text-lg bg-gray-200 text-gray-600 shadow-xl active:scale-95 transition-all">
-              참여 취소
-            </button>
-            <button onClick={openJoinModal} className="flex-[2] py-5 rounded-2xl font-black text-lg bg-sport-blue text-white shadow-xl active:scale-95 transition-all">
-              신청 수정하기
-            </button>
+            <button onClick={handleCancelJoin} className="flex-1 py-5 rounded-2xl font-black text-lg bg-gray-200 text-gray-600 shadow-xl active:scale-95 transition-all">참여 취소</button>
+            <button onClick={openJoinModal} className="flex-[2] py-5 rounded-2xl font-black text-lg bg-sport-blue text-white shadow-xl active:scale-95 transition-all">신청 수정하기</button>
           </div>
         ) : (
-          <button onClick={openJoinModal} className="w-full py-5 rounded-2xl font-black text-xl shadow-2xl transition-all active:scale-95 bg-sport-blue text-white">
-            지금 참가 신청하기
-          </button>
+          <button onClick={openJoinModal} className="w-full py-5 rounded-2xl font-black text-xl shadow-2xl transition-all active:scale-95 bg-sport-blue text-white">지금 참가 신청하기</button>
         )}
       </div>
       <BottomNav />
