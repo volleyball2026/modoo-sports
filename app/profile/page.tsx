@@ -9,6 +9,7 @@ import { User, Calendar, MapPin, LogOut, Trophy, Save, Loader2, Check } from 'lu
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 
+// [유지] 항상 최신 데이터를 불러오도록 캐시 무효화
 export const revalidate = 0;
 
 const SKILL_LEVELS = ["입문", "초급", "중급", "고급", "최상급"];
@@ -21,7 +22,7 @@ export default function ProfilePage() {
   const [participatedMatches, setParticipatedMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 프로필 상태 관리 (포지션은 배열로 관리하여 최대 3개 선택 지원)
+  // 프로필 상태 관리
   const [profileExt, setProfileExt] = useState<any>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -44,7 +45,7 @@ export default function ProfilePage() {
         return;
       }
 
-      // 로그인한 사용자 정보 동기화 (기존 로직 유지)
+      // [유지] 로그인 정보 자동 동기화 로직
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert({
@@ -55,7 +56,6 @@ export default function ProfilePage() {
 
       if (profileError) console.error('프로필 정보 동기화 실패:', profileError);
 
-      // 나의 운동 정보 불러오기
       const { data: profileData } = await supabase
         .from('profiles')
         .select('*')
@@ -67,7 +67,6 @@ export default function ProfilePage() {
         setEditForm({
           primary_sport: profileData.primary_sport || '배구',
           skill_level: profileData.skill_level || '입문',
-          // DB에는 "세터,레프트" 쉼표 문자열로 저장되므로 배열로 쪼개어 가져옴
           preferred_position: profileData.preferred_position ? profileData.preferred_position.split(',') : []
         });
       }
@@ -108,7 +107,6 @@ export default function ProfilePage() {
     }
   }
 
-  // 프로필 정보 저장
   const handleSaveProfile = async () => {
     try {
       setSaving(true);
@@ -117,7 +115,6 @@ export default function ProfilePage() {
         .update({
           primary_sport: editForm.primary_sport,
           skill_level: editForm.skill_level,
-          // 배열을 다시 쉼표로 이어서 DB에 저장
           preferred_position: editForm.preferred_position.join(',')
         })
         .eq('id', user.id);
@@ -139,14 +136,14 @@ export default function ProfilePage() {
     }
   };
 
-  // 포지션 다중 선택 토글 함수 (최대 3개)
+  // [수정] 포지션 다중 선택 토글 함수 (최대 2개로 제한)
   const togglePosition = (pos: string) => {
     const current = editForm.preferred_position;
     if (current.includes(pos)) {
       setEditForm({ ...editForm, preferred_position: current.filter(p => p !== pos) });
     } else {
-      if (current.length >= 3) {
-        alert('포지션은 최대 3개까지만 선택할 수 있습니다.');
+      if (current.length >= 2) {
+        alert('주 포지션은 최대 2개까지만 선택할 수 있습니다. (3순위는 매칭 시 선택 가능)');
         return;
       }
       setEditForm({ ...editForm, preferred_position: [...current, pos] });
@@ -184,8 +181,6 @@ export default function ProfilePage() {
       </header>
 
       <div className="max-w-lg mx-auto px-4 py-6">
-        
-        {/* 기존 유저 정보 카드 */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
           <div className="flex items-center gap-4 mb-4">
             {avatarUrl ? (
@@ -215,7 +210,7 @@ export default function ProfilePage() {
           </button>
         </div>
 
-        {/* --- [수정된 부분] 다종목 지원 및 배구 포지션 3개 선택 카드 --- */}
+        {/* 나의 운동 정보 카드 */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
@@ -232,8 +227,7 @@ export default function ProfilePage() {
             <div className="space-y-5 pt-2">
               <div>
                 <label className="text-xs font-bold text-gray-500 ml-1">주 종목</label>
-                <select 
-                  className="w-full mt-1 p-3 rounded-lg border border-gray-200 font-bold bg-white focus:border-sport-blue outline-none"
+                <select className="w-full mt-1 p-3 rounded-lg border border-gray-200 font-bold bg-white focus:border-sport-blue outline-none"
                   value={editForm.primary_sport}
                   onChange={(e) => setEditForm({...editForm, primary_sport: e.target.value, preferred_position: []})}
                 >
@@ -243,8 +237,7 @@ export default function ProfilePage() {
 
               <div>
                 <label className="text-xs font-bold text-gray-500 ml-1">내 실력 (레벨)</label>
-                <select 
-                  className="w-full mt-1 p-3 rounded-lg border border-gray-200 font-bold bg-white focus:border-sport-blue outline-none"
+                <select className="w-full mt-1 p-3 rounded-lg border border-gray-200 font-bold bg-white focus:border-sport-blue outline-none"
                   value={editForm.skill_level}
                   onChange={(e) => setEditForm({...editForm, skill_level: e.target.value})}
                 >
@@ -254,11 +247,10 @@ export default function ProfilePage() {
 
               <div>
                 <label className="text-xs font-bold text-gray-500 ml-1">
-                  선호 포지션 {editForm.primary_sport === '배구' && <span className="text-sport-blue">(최대 3개)</span>}
+                  선호 포지션 {editForm.primary_sport === '배구' && <span className="text-sport-blue">(최대 2개)</span>}
                 </label>
                 
                 {editForm.primary_sport === '배구' ? (
-                  // 배구일 때: 버튼형 다중 선택 UI
                   <div className="grid grid-cols-3 gap-2 mt-2">
                     {VOLLEYBALL_POSITIONS.map(pos => {
                       const isSelected = editForm.preferred_position.includes(pos);
@@ -276,14 +268,8 @@ export default function ProfilePage() {
                     })}
                   </div>
                 ) : (
-                  // 다른 종목일 때: 일반 텍스트 입력
-                  <input 
-                    type="text"
-                    placeholder="선호하는 포지션을 입력하세요"
-                    className="w-full mt-1 p-3 rounded-lg border border-gray-200 font-bold bg-white focus:border-sport-blue outline-none"
-                    value={editForm.preferred_position.join('')}
-                    onChange={(e) => setEditForm({...editForm, preferred_position: [e.target.value]})}
-                  />
+                  <input type="text" placeholder="선호하는 포지션을 입력하세요" className="w-full mt-1 p-3 rounded-lg border border-gray-200 font-bold bg-white focus:border-sport-blue outline-none"
+                    value={editForm.preferred_position.join('')} onChange={(e) => setEditForm({...editForm, preferred_position: [e.target.value]})} />
                 )}
               </div>
 
@@ -316,69 +302,50 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* 기존 매치 리스트 보존 구역 (생략 없이 원본 그대로 유지됨) */}
+        {/* 매치 리스트 (유지) */}
         <div className="space-y-6">
           <div>
             <h3 className="text-lg font-bold text-gray-900 mb-3">내가 개설한 매치</h3>
-            {myMatches.length === 0 ? (
-              <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
-                <p className="text-gray-500 mb-4">개설한 매치가 없습니다</p>
-                <Link href="/match/create" className="inline-block px-6 py-3 bg-sport-blue text-white rounded-lg hover:bg-blue-700 transition-colors font-bold">
-                  매치 만들기
+            <div className="space-y-3">
+              {myMatches.length > 0 ? myMatches.map((match) => (
+                <Link key={match.id} href={`/match/${match.id}`} className="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xl">{getSportEmoji(match.sport_type)}</span>
+                    <span className="text-sm font-semibold text-sport-blue">{match.sport_type}</span>
+                    <span className={`ml-auto px-2 py-1 rounded-full text-xs font-medium ${match.status === 'open' ? 'bg-sport-green text-white' : 'bg-gray-100 text-gray-600'}`}>
+                      {match.status === 'open' ? '모집 중' : '종료'}
+                    </span>
+                  </div>
+                  <p className="font-medium text-gray-900 mb-2">{match.title}</p>
+                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                    <div className="flex items-center gap-1"><Calendar className="w-4 h-4" />{format(new Date(match.match_date), 'M/d HH:mm', { locale: ko })}</div>
+                    <div className="flex items-center gap-1"><MapPin className="w-4 h-4" />{match.location}</div>
+                  </div>
                 </Link>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {myMatches.map((match) => (
-                  <Link key={match.id} href={`/match/${match.id}`} className="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-xl">{getSportEmoji(match.sport_type)}</span>
-                      <span className="text-sm font-semibold text-sport-blue">{match.sport_type}</span>
-                      <span className={`ml-auto px-2 py-1 rounded-full text-xs font-medium ${match.status === 'open' ? 'bg-sport-green text-white' : 'bg-gray-100 text-gray-600'}`}>
-                        {match.status === 'open' ? '모집 중' : '종료'}
-                      </span>
-                    </div>
-                    <p className="font-medium text-gray-900 mb-2">{match.title}</p>
-                    <div className="flex items-center gap-4 text-sm text-gray-600">
-                      <div className="flex items-center gap-1"><Calendar className="w-4 h-4" />{format(new Date(match.match_date), 'M/d HH:mm', { locale: ko })}</div>
-                      <div className="flex items-center gap-1"><MapPin className="w-4 h-4" />{match.location}</div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
+              )) : <div className="bg-white rounded-lg border border-gray-200 p-8 text-center"><p className="text-gray-500">개설한 매치가 없습니다</p></div>}
+            </div>
           </div>
 
           <div>
             <h3 className="text-lg font-bold text-gray-900 mb-3">참가한 매치</h3>
-            {participatedMatches.length === 0 ? (
-              <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
-                <p className="text-gray-500 mb-4">참가한 매치가 없습니다</p>
-                <Link href="/" className="inline-block px-6 py-3 bg-sport-blue text-white rounded-lg hover:bg-blue-700 transition-colors font-bold">
-                  매치 둘러보기
+            <div className="space-y-3">
+              {participatedMatches.length > 0 ? participatedMatches.map((match) => (
+                <Link key={match.id} href={`/match/${match.id}`} className="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xl">{getSportEmoji(match.sport_type)}</span>
+                    <span className="text-sm font-semibold text-sport-blue">{match.sport_type}</span>
+                  </div>
+                  <p className="font-medium text-gray-900 mb-2">{match.title}</p>
+                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                    <div className="flex items-center gap-1"><Calendar className="w-4 h-4" />{format(new Date(match.match_date), 'M/d HH:mm', { locale: ko })}</div>
+                    <div className="flex items-center gap-1"><MapPin className="w-4 h-4" />{match.location}</div>
+                  </div>
                 </Link>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {participatedMatches.map((match) => (
-                  <Link key={match.id} href={`/match/${match.id}`} className="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-xl">{getSportEmoji(match.sport_type)}</span>
-                      <span className="text-sm font-semibold text-sport-blue">{match.sport_type}</span>
-                    </div>
-                    <p className="font-medium text-gray-900 mb-2">{match.title}</p>
-                    <div className="flex items-center gap-4 text-sm text-gray-600">
-                      <div className="flex items-center gap-1"><Calendar className="w-4 h-4" />{format(new Date(match.match_date), 'M/d HH:mm', { locale: ko })}</div>
-                      <div className="flex items-center gap-1"><MapPin className="w-4 h-4" />{match.location}</div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
+              )) : <div className="bg-white rounded-lg border border-gray-200 p-8 text-center"><p className="text-gray-500">참가한 매치가 없습니다</p></div>}
+            </div>
           </div>
         </div>
       </div>
-
       <BottomNav />
     </div>
   );
