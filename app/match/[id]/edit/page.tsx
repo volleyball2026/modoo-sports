@@ -2,9 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import Link from 'next/link';
-import { supabase, SPORT_TYPES } from '@/lib/supabase';
-import { ArrowLeft, Calendar, MapPin, Users, FileText, Trophy, Loader2 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { ArrowLeft, Save, Loader2 } from 'lucide-react';
 
 export default function EditMatchPage() {
   const router = useRouter();
@@ -12,209 +11,156 @@ export default function EditMatchPage() {
   const matchId = params.id;
 
   const [loading, setLoading] = useState(true);
-  const [updating, setUpdating] = useState(false);
-  const [formData, setFormData] = useState({
-    title: '',
-    sport_type: '',
-    match_date: '',
-    location: '',
-    max_participants: 12,
-    description: '',
-  });
+  const [saving, setSaving] = useState(false);
+  
+  // 폼 상태 관리
+  const [title, setTitle] = useState('');
+  const [matchDate, setMatchDate] = useState('');
+  const [location, setLocation] = useState('');
+  const [maxParticipants, setMaxParticipants] = useState(18);
+  const [recruitmentType, setRecruitmentType] = useState('선착순');
 
-  // 1. 기존 매치 정보 불러오기
+  // 1. 기존 매치 데이터 불러오기
   useEffect(() => {
-    async function fetchMatch() {
+    async function loadMatch() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          router.push('/login');
-          return;
-        }
-
-        const { data, error } = await supabase
+        const { data: match, error } = await supabase
           .from('matches')
           .select('*')
           .eq('id', matchId)
           .single();
 
-        if (error) throw error;
-
-        // 방장이 아니면 접근 차단
-        if (data.manager_id !== user.id) {
+        if (error || !match) throw new Error('매치를 찾을 수 없습니다.');
+        
+        // 방장 권한 확인
+        if (match.manager_id !== user?.id) {
           alert('수정 권한이 없습니다.');
           router.push(`/match/${matchId}`);
           return;
         }
 
-        // 폼 데이터에 기존 값 채우기
-        setFormData({
-          title: data.title,
-          sport_type: data.sport_type,
-          match_date: data.match_date,
-          location: data.location,
-          max_participants: data.max_participants,
-          description: data.description || '',
-        });
-      } catch (error) {
-        console.error('불러오기 실패:', error);
-        alert('정보를 불러올 수 없습니다.');
+        setTitle(match.title);
+        // datetime-local 입력을 위해 초 단위 제거 (YYYY-MM-DDTHH:mm)
+        setMatchDate(new Date(match.match_date).toISOString().slice(0, 16));
+        setLocation(match.location);
+        setMaxParticipants(match.max_participants);
+        setRecruitmentType(match.recruitment_type);
+      } catch (err) {
+        alert('데이터를 불러오지 못했습니다.');
+        router.back();
       } finally {
         setLoading(false);
       }
     }
-    fetchMatch();
+    loadMatch();
   }, [matchId, router]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
-
-  // 2. 수정 내용 저장하기 (UPDATE)
-  const handleSubmit = async (e: React.FormEvent) => {
+  // 2. 수정 사항 저장하기
+  const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaving(true);
+
     try {
-      setUpdating(true);
       const { error } = await supabase
         .from('matches')
         .update({
-          title: formData.title,
-          sport_type: formData.sport_type,
-          match_date: formData.match_date,
-          location: formData.location,
-          max_participants: formData.max_participants,
-          description: formData.description,
+          title,
+          match_date: new Date(matchDate).toISOString(),
+          location,
+          max_participants: maxParticipants,
+          recruitment_type: recruitmentType,
         })
         .eq('id', matchId);
 
       if (error) throw error;
 
-      alert('매치 정보가 수정되었습니다! ✨');
+      alert('매치 수정이 완료되었습니다! 🏐');
       router.push(`/match/${matchId}`);
       router.refresh();
     } catch (error) {
-      console.error('수정 실패:', error);
       alert('수정 중 오류가 발생했습니다.');
     } finally {
-      setUpdating(false);
+      setSaving(false);
     }
   };
 
-  if (loading) return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-      <Loader2 className="w-10 h-10 animate-spin text-sport-blue" />
-      <p className="text-gray-500 font-medium">정보를 가져오는 중...</p>
-    </div>
-  );
+  if (loading) return <div className="p-10 text-center font-bold text-sport-blue">정보 불러오는 중...</div>;
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-lg mx-auto px-4 py-4 flex items-center gap-3">
-          <button onClick={() => router.back()} className="text-gray-600">
-            <ArrowLeft className="w-6 h-6" />
-          </button>
-          <h1 className="text-xl font-bold text-gray-900">매치 정보 수정</h1>
-        </div>
+      <header className="bg-white border-b sticky top-0 z-20 flex p-4 max-w-lg mx-auto items-center gap-4">
+        <button onClick={() => router.back()}><ArrowLeft /></button>
+        <h1 className="font-bold text-lg">매치 정보 수정</h1>
       </header>
 
-      <main className="max-w-lg mx-auto px-4 py-6">
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
-            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-              <Trophy className="w-4 h-4 text-sport-blue" /> 모임 제목
-            </label>
+      <main className="max-w-lg mx-auto p-6">
+        <form onSubmit={handleUpdate} className="space-y-6">
+          <div className="space-y-2">
+            <label className="text-sm font-black text-gray-500 ml-1">매치 제목</label>
             <input
-              type="text"
-              name="title"
               required
-              value={formData.title}
-              onChange={handleChange}
-              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-sport-blue outline-none"
+              className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="예: 금요 야간 배구 픽업게임"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-black text-gray-500 ml-1">일시</label>
+            <input
+              required
+              type="datetime-local"
+              className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
+              value={matchDate}
+              onChange={(e) => setMatchDate(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-black text-gray-500 ml-1">장소</label>
+            <input
+              required
+              className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="체육관 이름을 입력하세요"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
-              <label className="block text-sm font-bold text-gray-700 mb-2">종목</label>
+            <div className="space-y-2">
+              <label className="text-sm font-black text-gray-500 ml-1">모집 인원</label>
+              <input
+                required
+                type="number"
+                className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
+                value={maxParticipants}
+                onChange={(e) => setMaxParticipants(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-black text-gray-500 ml-1">방식</label>
               <select
-                name="sport_type"
-                value={formData.sport_type}
-                onChange={handleChange}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none"
+                className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold appearance-none bg-white"
+                value={recruitmentType}
+                onChange={(e) => setRecruitmentType(e.target.value)}
               >
-                {SPORT_TYPES.map((sport) => (
-                  <option key={sport.value} value={sport.value}>{sport.emoji} {sport.label}</option>
-                ))}
+                <option value="선착순">선착순</option>
+                <option value="알고리즘">알고리즘 (포지션)</option>
               </select>
             </div>
-            <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                <Users className="w-4 h-4 text-sport-blue" /> 정원
-              </label>
-              <input
-                type="number"
-                name="max_participants"
-                required
-                value={formData.max_participants}
-                onChange={handleChange}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none"
-              />
-            </div>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm space-y-4">
-            <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-sport-blue" /> 일시
-              </label>
-              <input
-                type="datetime-local"
-                name="match_date"
-                required
-                value={formData.match_date}
-                onChange={handleChange}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-sport-blue" /> 장소
-              </label>
-              <input
-                type="text"
-                name="location"
-                required
-                value={formData.location}
-                onChange={handleChange}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none"
-              />
-            </div>
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
-            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-sport-blue" /> 상세 설명
-            </label>
-            <textarea
-              name="description"
-              rows={5}
-              value={formData.description}
-              onChange={handleChange}
-              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-none"
-            />
-          </div>
-
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 z-20 max-w-lg mx-auto">
-            <button
-              type="submit"
-              disabled={updating}
-              className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-lg active:scale-95 transition-all disabled:bg-gray-400"
-            >
-              {updating ? '수정 사항 저장 중...' : '수정 완료'}
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full py-5 bg-sport-blue text-white rounded-2xl font-black text-xl shadow-xl flex items-center justify-center gap-2 mt-8 disabled:bg-gray-300"
+          >
+            {saving ? <Loader2 className="animate-spin" /> : <Save />}
+            수정 내용 저장하기
+          </button>
         </form>
       </main>
     </div>
