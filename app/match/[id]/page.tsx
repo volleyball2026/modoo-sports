@@ -8,8 +8,8 @@ import { ArrowLeft, Calendar, MapPin, Users, Info, Trash2, Edit3, User, External
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 
-// 9인제 배구 포지션 설정 (보내주신 코드 기준)
-const POSITIONS_ALL = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
+// [업데이트] 여순광 픽업게임 실제 포지션 리스트 (9인제 기준)
+const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백", "상관없음"];
 
 export default function MatchDetailPage() {
   const router = useRouter();
@@ -20,7 +20,9 @@ export default function MatchDetailPage() {
   const [participants, setParticipants] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('info'); // 'info' or 'lineup'
+  const [activeTab, setActiveTab] = useState('info');
+  const [showPositionModal, setShowPositionModal] = useState(false);
+  const [selectedPosition, setSelectedPosition] = useState('');
 
   const fetchMatchDetails = useCallback(async () => {
     try {
@@ -40,123 +42,149 @@ export default function MatchDetailPage() {
 
   useEffect(() => { fetchMatchDetails(); }, [fetchMatchDetails]);
 
-  // --- [핵심] 라인업 생성 알고리즘 (파이썬 로직 이식) ---
+  const isJoined = participants.some((p) => p.user_id === user?.id);
+
+  // 참여 신청 로직
+  async function submitJoin(position: string = '') {
+    try {
+      const { error } = await supabase.from('match_participants').insert([{ 
+        match_id: matchId, 
+        user_id: user.id,
+        position: position 
+      }]);
+      if (error) throw error;
+      
+      alert('참가 신청이 완료되었습니다! 🏐');
+      setShowPositionModal(false);
+      fetchMatchDetails();
+    } catch (error) { alert('참가 신청 중 오류가 발생했습니다.'); }
+  }
+
+  const handleJoinToggle = async () => {
+    if (!user) { alert('로그인이 필요합니다.'); router.push('/login'); return; }
+
+    if (isJoined) {
+      if (match?.manager_id === user.id) { alert('방장은 참여 취소가 불가능합니다.'); return; }
+      if (confirm('참여를 취소하시겠습니까?')) {
+        await supabase.from('match_participants').delete().eq('match_id', matchId).eq('user_id', user.id);
+        fetchMatchDetails();
+      }
+    } else {
+      if (match.recruitment_type === '알고리즘') setShowPositionModal(true);
+      else submitJoin();
+    }
+  };
+
+  // 라인업 생성 알고리즘 (스네이크 방식 적용)
   const generateLineup = async () => {
-    if (!confirm('기존 라인업을 초기화하고 새로 생성하시겠습니까?')) return;
+    if (!confirm('새로운 라인업을 생성하시겠습니까?')) return;
+    
+    // 파이썬 로직 기반: 점수 계산 및 드래프트 분배 (1~4라운드)
+    let players = [...participants].map(p => ({ ...p, score: 50 + Math.random() }))
+                                   .sort((a, b) => b.score - a.score);
 
-    // 1. 점수 부여 (참여 횟수 등이 아직 없으므로 현재는 랜덤+레벨 기반 가상점수)
-    let players = participants.map(p => ({
-      ...p,
-      score: 50 + Math.random() // 파이썬의 기본 50점 + 랜덤값 로직
-    })).sort((a, b) => b.score - a.score); // 점수순 정렬
-
-    // 2. 스네이크 드래프트 분배 (1-A, 2-B, 3-B, 4-A...)
-    const rounds = [1, 2, 3, 4];
-    for (const r of rounds) {
+    for (let r = 1; r <= 4; r++) {
       let teamA: any[] = [];
       let teamB: any[] = [];
-      
       players.forEach((p, idx) => {
         if ((idx % 4 === 0) || (idx % 4 === 3)) teamA.push(p);
         else teamB.push(p);
       });
 
-      // 3. 각 팀내 포지션 배정 (1순위 -> 2순위 -> 3순위 -> 랜덤 순)
-      const assignPositions = (team: any[]) => {
-        let availablePos = [...POSITIONS_ALL];
+      const assignPos = (team: any[]) => {
+        let available = [...VOLLEYBALL_POSITIONS].filter(p => p !== "상관없음");
         return team.map(p => {
-          let finalPos = '대기';
-          // 1~3순위 희망 포지션 체크
-          for (let step = 1; step <= 3; step++) {
-             const wish = p.position; // 현재는 position 하나만 받으므로 1순위로 처리
-             if (availablePos.includes(wish)) {
-               finalPos = wish;
-               availablePos = availablePos.filter(pos => pos !== wish);
-               break;
-             }
-          }
-          // 남은 자리 랜덤 배정
-          if (finalPos === '대기' && availablePos.length > 0) {
-            finalPos = availablePos.shift() || '대기';
-          }
-          return { id: p.id, pos: finalPos };
+          let pos = p.position !== "상관없음" && available.includes(p.position) ? p.position : (available.shift() || '대기');
+          available = available.filter(v => v !== pos);
+          return { id: p.id, pos };
         });
       };
 
-      const resultsA = assignPositions(teamA);
-      const resultsB = assignPositions(teamB);
-
-      // 4. DB 업데이트 (세트별 팀 및 포지션 저장)
-      for (const res of resultsA) {
-        await supabase.from('match_participants').update({ [`team_r${r}`]: 'A팀', [`pos_r${r}`]: res.pos }).eq('id', res.id);
-      }
-      for (const res of resultsB) {
-        await supabase.from('match_participants').update({ [`team_r${r}`]: 'B팀', [`pos_r${r}`]: res.pos }).eq('id', res.id);
+      const results = [...assignPos(teamA).map(res => ({...res, team: 'A팀'})), 
+                       ...assignPos(teamB).map(res => ({...res, team: 'B팀'}))];
+      
+      for (const res of results) {
+        await supabase.from('match_participants')
+          .update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos })
+          .eq('id', res.id);
       }
     }
-    alert('공평한 라인업 생성이 완료되었습니다!');
+    alert('라인업 생성 완료!');
     fetchMatchDetails();
   };
 
-  const toggleVisibility = async () => {
-    await supabase.from('matches').update({ is_lineup_visible: !match.is_lineup_visible }).eq('id', matchId);
-    fetchMatchDetails();
-  };
-
-  if (loading) return <div className="p-10 text-center">불러오는 중...</div>;
+  if (loading) return <div className="p-10 text-center font-bold text-sport-blue">데이터 로딩 중...</div>;
 
   const isManager = user?.id === match?.manager_id;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-32">
-      {/* 상단 탭 메뉴 */}
-      <div className="bg-white border-b sticky top-0 z-20">
+    <div className="min-h-screen bg-gray-50 pb-44">
+      <header className="bg-white border-b sticky top-0 z-20 flex p-4 max-w-lg mx-auto justify-between items-center">
+        <div className="flex items-center gap-2">
+          <button onClick={() => router.back()}><ArrowLeft /></button>
+          <h1 className="font-bold text-lg">매치 상세</h1>
+        </div>
+        {isManager && (
+          <button onClick={() => supabase.from('matches').update({ is_lineup_visible: !match.is_lineup_visible }).eq('id', matchId).then(() => fetchMatchDetails())}>
+            {match.is_lineup_visible ? <EyeOff className="text-gray-400"/> : <Eye className="text-sport-blue"/>}
+          </button>
+        )}
+      </header>
+
+      <div className="bg-white border-b sticky top-14 z-20">
         <div className="flex max-w-lg mx-auto">
-          <button onClick={() => setActiveTab('info')} className={`flex-1 py-4 font-bold ${activeTab === 'info' ? 'border-b-2 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>매치 정보</button>
-          <button onClick={() => setActiveTab('lineup')} className={`flex-1 py-4 font-bold ${activeTab === 'lineup' ? 'border-b-2 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>라인업</button>
+          <button onClick={() => setActiveTab('info')} className={`flex-1 py-4 font-bold ${activeTab === 'info' ? 'border-b-4 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>정보</button>
+          <button onClick={() => setActiveTab('lineup')} className={`flex-1 py-4 font-bold ${activeTab === 'lineup' ? 'border-b-4 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>라인업</button>
         </div>
       </div>
 
-      <main className="max-w-lg mx-auto p-4">
+      <main className="max-w-lg mx-auto p-4 space-y-6">
         {activeTab === 'info' ? (
-          /* 기존 매치 정보 뷰 */
-          <div className="space-y-6">
+          <>
             <div className="bg-white p-6 rounded-3xl shadow-sm border">
-               <h2 className="text-2xl font-black mb-4">{match.title}</h2>
-               <div className="text-sm text-gray-500 space-y-2">
-                 <p>📍 {match.location}</p>
-                 <p>⏰ {format(new Date(match.match_date), 'PPP p', { locale: ko })}</p>
-                 <p>👥 인원: {participants.length} / {match.max_participants}명</p>
+               <h2 className="text-2xl font-black mb-4 leading-tight">{match.title}</h2>
+               <div className="space-y-3 text-sm text-gray-600">
+                 <p className="flex items-center gap-2 font-bold"><Calendar className="w-4 h-4 text-sport-blue"/> {format(new Date(match.match_date), 'M월 d일 (EEEE) HH:mm', { locale: ko })}</p>
+                 <p className="flex items-center gap-2 font-bold"><MapPin className="w-4 h-4 text-sport-blue"/> {match.location}</p>
+                 <p className="flex items-center gap-2 font-bold"><Users className="w-4 h-4 text-sport-blue"/> {participants.length} / {match.max_participants}명</p>
                </div>
             </div>
+
             {isManager && (
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={generateLineup} className="flex items-center justify-center gap-2 py-4 bg-gray-900 text-white rounded-2xl font-bold"><Zap size={18}/> 라인업 생성</button>
-                <button onClick={toggleVisibility} className="flex items-center justify-center gap-2 py-4 bg-white border rounded-2xl font-bold">
-                  {match.is_lineup_visible ? <><EyeOff size={18}/> 비공개</> : <><Eye size={18}/> 라인업 공개</>}
-                </button>
-              </div>
+              <button onClick={generateLineup} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl flex items-center justify-center gap-2">
+                <Zap className="w-6 h-6 text-yellow-400 fill-yellow-400"/> 라인업 자동 생성
+              </button>
             )}
-          </div>
-        ) : (
-          /* [핵심] 라인업 뷰 (Court View) */
-          <div className="space-y-8">
-            {!match.is_lineup_visible && !isManager ? (
-              <div className="text-center py-20 bg-white rounded-3xl border border-dashed">
-                <p className="text-gray-400">운영진이 라인업을 구성 중입니다... 🕵️‍♂️</p>
+
+            <div>
+              <h3 className="font-black text-lg mb-4 px-1">참여자 명단</h3>
+              <div className="grid grid-cols-2 gap-3">
+                {participants.map((p, idx) => (
+                  <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border shadow-sm">
+                    <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center"><User className="text-sport-blue w-5 h-5"/></div>
+                    <div className="overflow-hidden">
+                      <p className="text-sm font-bold truncate">{p.profiles?.full_name}</p>
+                      <p className="text-[10px] text-sport-green font-bold uppercase tracking-widest">{p.position || 'PLAYER'}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ) : (
+            </div>
+          </>
+        ) : (
+          <div className="space-y-8">
+            {match.is_lineup_visible || isManager ? (
               [1, 2, 3, 4].map(r => (
                 <div key={r} className="space-y-4">
-                  <h3 className="font-black text-lg text-sport-blue"> {r*2-1}·{r*2}세트 라인업</h3>
-                  <div className="space-y-2">
+                  <h3 className="font-black text-lg text-sport-blue bg-blue-50 p-3 rounded-xl inline-block">{r*2-1}·{r*2}세트 라인업</h3>
+                  <div className="grid grid-cols-1 gap-4">
                     {['A팀', 'B팀'].map(t => (
-                      <div key={t} className={`p-4 rounded-2xl border ${t === 'A팀' ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'}`}>
-                        <p className={`font-bold text-sm mb-3 ${t === 'A팀' ? 'text-red-600' : 'text-blue-600'}`}>{t}</p>
+                      <div key={t} className={`p-5 rounded-3xl border-2 ${t === 'A팀' ? 'bg-red-50/50 border-red-100' : 'bg-blue-50/50 border-blue-100'}`}>
+                        <p className={`font-black text-sm mb-4 ${t === 'A팀' ? 'text-red-500' : 'text-blue-500'}`}>{t} 코트</p>
                         <div className="grid grid-cols-3 gap-2">
                           {participants.filter(p => p[`team_r${r}`] === t).map(p => (
-                            <div key={p.id} className="bg-white p-2 rounded-lg shadow-sm text-center">
-                              <p className="text-[10px] text-gray-400 font-bold">{p[`pos_r${r}`]}</p>
+                            <div key={p.id} className="bg-white p-2 rounded-xl shadow-sm text-center border border-gray-100">
+                              <p className="text-[9px] text-gray-400 font-black mb-1">{p[`pos_r${r}`]}</p>
                               <p className="text-xs font-bold truncate">{p.profiles?.full_name}</p>
                             </div>
                           ))}
@@ -166,10 +194,44 @@ export default function MatchDetailPage() {
                   </div>
                 </div>
               ))
+            ) : (
+              <div className="text-center py-20 text-gray-400 font-bold">라인업이 아직 공개되지 않았습니다. 🕵️‍♂️</div>
             )}
           </div>
         )}
       </main>
+
+      {/* 포지션 선택 모달 */}
+      {showPositionModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center backdrop-blur-sm">
+          <div className="bg-white w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom-full duration-300">
+            <div className="flex items-center justify-between mb-8">
+              <h3 className="text-2xl font-black">주 포지션 선택</h3>
+              <button onClick={() => setShowPositionModal(false)}><X className="w-8 h-8 text-gray-300"/></button>
+            </div>
+            <div className="grid grid-cols-3 gap-3 mb-8">
+              {VOLLEYBALL_POSITIONS.map((pos) => (
+                <button
+                  key={pos}
+                  onClick={() => setSelectedPosition(pos)}
+                  className={`py-4 rounded-2xl font-bold text-sm transition-all border-2 ${
+                    selectedPosition === pos ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-50 bg-gray-50 text-gray-500'
+                  }`}
+                >
+                  {pos}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => submitJoin(selectedPosition)} disabled={!selectedPosition} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black text-xl shadow-xl disabled:bg-gray-200">신청 완료</button>
+          </div>
+        </div>
+      )}
+
+      <div className="fixed bottom-20 left-0 right-0 p-4 max-w-lg mx-auto z-10 bg-gradient-to-t from-gray-50 pt-10">
+        <button onClick={handleJoinToggle} className={`w-full py-5 rounded-2xl font-black text-xl shadow-2xl transition-all active:scale-95 ${isJoined ? 'bg-gray-200 text-gray-500' : 'bg-sport-blue text-white'}`}>
+          {isJoined ? '참여 취소하기' : '지금 참가 신청하기'}
+        </button>
+      </div>
       <BottomNav />
     </div>
   );
