@@ -57,12 +57,19 @@ export default function MatchDetailPage() {
 
   // 2. 관리자 기능: 매치 삭제
   const deleteMatch = async () => {
-    if (!confirm('정말로 이 매치를 삭제하시겠습니까? 삭제 후에는 복구할 수 없습니다.')) return;
+    if (!confirm('정말로 이 매치를 삭제하시겠습니까?')) return;
     try {
       const { error } = await supabase.from('matches').delete().eq('id', matchId);
       if (error) throw error;
+      
       alert('매치가 삭제되었습니다.');
+      
+      // 1. 메인 화면으로 이동
       router.push('/');
+      
+      // 2. [추가] 목록 화면을 강제로 새로고침해서 삭제된 데이터를 반영합니다.
+      router.refresh(); 
+      
     } catch (error) {
       alert('삭제 중 오류가 발생했습니다.');
     }
