@@ -37,6 +37,7 @@ export default function MatchDetailPage() {
       const { data: matchData } = await supabase.from('matches').select('*').eq('id', matchId).single();
       setMatch(matchData);
 
+      // profiles 테이블에서 full_name과 avatar_url(카카오 프로필 사진 주소)을 함께 가져옵니다.
       const { data: partData } = await supabase.from('match_participants')
         .select('*, profiles(full_name, avatar_url)')
         .eq('match_id', matchId);
@@ -55,20 +56,18 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // 2. 관리자 기능: 매치 삭제 (에러 추적 강화)
+  // 2. 관리자 기능: 매치 삭제 (에러 추적 및 강력 새로고침 기능 유지)
   const deleteMatch = async () => {
     if (!confirm('정말로 이 매치를 삭제하시겠습니까? 삭제 후에는 복구할 수 없습니다.')) return;
     try {
       const { error } = await supabase.from('matches').delete().eq('id', matchId);
       
-      // 에러가 있으면 여기서 정확한 이유를 알림창으로 띄워줍니다.
       if (error) {
         alert(`❌ DB 삭제 실패: ${error.message} (코드: ${error.code})`);
         return;
       }
       
       alert('매치가 성공적으로 삭제되었습니다. 🏐');
-      // 캐시를 완전히 무시하고 메인 화면으로 강제 이동 및 새로고침
       window.location.href = '/'; 
     } catch (error: any) {
       alert(`❌ 코드 실행 실패: ${error.message}`);
@@ -108,7 +107,7 @@ export default function MatchDetailPage() {
     }
   };
 
-  // 4. 라인업 생성 알고리즘 (파이썬 스네이크 드래프트 로직 이식)
+  // 4. 라인업 생성 알고리즘 (파이썬 스네이크 드래프트 로직 유지)
   const generateLineup = async () => {
     if (!confirm('새로운 라인업을 자동 생성하시겠습니까?')) return;
     
@@ -202,7 +201,18 @@ export default function MatchDetailPage() {
               <div className="grid grid-cols-2 gap-3">
                 {participants.map((p, idx) => (
                   <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border shadow-sm">
-                    <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center"><User className="text-sport-blue w-5 h-5"/></div>
+                    {/* 👇 카카오 프로필 사진이 있으면 보여주고, 없으면 기본 아이콘을 보여주는 마법의 로직입니다 */}
+                    {p.profiles?.avatar_url ? (
+                      <img 
+                        src={p.profiles.avatar_url} 
+                        alt="프로필 사진" 
+                        className="w-10 h-10 rounded-full object-cover border border-gray-100 shrink-0" 
+                      />
+                    ) : (
+                      <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center shrink-0">
+                        <User className="text-sport-blue w-5 h-5"/>
+                      </div>
+                    )}
                     <div className="overflow-hidden">
                       <p className="text-sm font-bold truncate">{p.profiles?.full_name}</p>
                       <p className="text-[10px] text-sport-green font-bold uppercase tracking-widest">{p.position || 'PLAYER'}</p>
