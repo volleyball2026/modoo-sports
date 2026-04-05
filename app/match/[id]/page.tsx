@@ -16,21 +16,25 @@ const VOLLEYBALL_POSITIONS = [...REAL_POSITIONS, "상관없음"];
 const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
 const BONUS_POSITIONS = ["선택 안함", "속공", "레프트백", "센터백", "라이트백"];
 
+// 정보 탭용 이름 마스킹 (이희성 -> 이**)
 const maskName = (name: string) => {
   if (!name) return "";
   return name[0] + "*".repeat(Math.max(0, name.length - 1));
 };
 
-// 🛡️ 결정론적 랜덤 변수 생성기 (UI 표시용과 알고리즘 로직 동기화)
-const getSeedValue = (id: string, round: number) => {
+// 🛡️ 결정론적 랜덤 변수 생성기 (p.user_id를 활용하여 상시 고유값 유지)
+const getSeedValue = (userId: string, round: number) => {
+  if (!userId) return 0.5; // ID가 없을 경우 중간값
   let hash = 0;
-  const str = id + round;
+  const str = userId + round;
   for (let i = 0; i < str.length; i++) {
     hash = (hash << 5) - hash + str.charCodeAt(i);
     hash |= 0;
   }
   const x = Math.sin(hash) * 10000;
-  return parseFloat((x - Math.floor(x)).toFixed(2)); 
+  // 0.01 ~ 0.99 사이의 값을 반환 (0이 나오지 않도록 보정)
+  const seed = parseFloat((x - Math.floor(x)).toFixed(2));
+  return seed === 0 ? 0.01 : seed;
 };
 
 export default function MatchDetailPage() {
@@ -44,7 +48,7 @@ export default function MatchDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('info');
   const [activeRound, setActiveRound] = useState(1);
-  const [showAlgoGuide, setShowAlgoGuide] = useState(false); // 알고리즘 가이드 토글 상태
+  const [showAlgoGuide, setShowAlgoGuide] = useState(false); // 가이드 토글
   
   const [showPositionModal, setShowPositionModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false); 
@@ -79,13 +83,15 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // --- 📊 가중치 계산 로직 (UI 표시 전용) ---
+  // --- 📊 가중치 실시간 계산 및 변수 노출 ---
   const getPlayerStatsForRound = (player: any, round: number) => {
     const skillMap: any = { '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 };
     const skillScore = skillMap[player.profiles?.skill_level] || 50;
+    
     let penaltyCount = 0;
     let mileage = 0;
 
+    // 이전 라운드 기록으로 가중치 계산
     for (let r = 1; r < round; r++) {
       const assigned = player[`pos_r${r}`];
       if (!assigned) continue;
@@ -96,10 +102,12 @@ export default function MatchDetailPage() {
       else mileage += 3;
     }
 
-    const seed = getSeedValue(player.id, round); 
-    const priorityScore = (100 - (penaltyCount * 10) + mileage + seed).toFixed(2);
+    // ✅ 변수(Seed) 값을 참가자 user_id 기준으로 고정 생성
+    const seed = getSeedValue(player.user_id, round); 
+    const baseScore = 100;
+    const finalScore = (baseScore - (penaltyCount * 10) + mileage + seed).toFixed(2);
     
-    return { skillScore, priorityScore, penalty: penaltyCount * 10, mileage, seed };
+    return { skillScore, finalScore, penalty: penaltyCount * 10, mileage, seed };
   };
 
   const CourtView = ({ teamPlayers, teamType, round }: { teamPlayers: any[], teamType: string, round: number }) => {
@@ -116,29 +124,31 @@ export default function MatchDetailPage() {
     const renderPlayer = (posName: string) => {
       const p = teamPlayers.find(player => player[`pos_r${round}`] === posName);
       if (!p) return (
-        <div className="flex-1 border border-dashed border-gray-200 rounded-[20px] p-1 min-h-[90px] flex items-center justify-center opacity-30">
-          <span className="text-[9px] font-black text-gray-400 uppercase">{posName}</span>
+        <div className="flex-1 border border-dashed border-gray-200 rounded-[24px] p-1 min-h-[100px] flex items-center justify-center opacity-30">
+          <span className="text-[10px] font-black text-gray-400 uppercase">{posName}</span>
         </div>
       );
 
-      const { priorityScore, penalty, mileage, seed } = getPlayerStatsForRound(p, round);
+      const { finalScore, penalty, mileage, seed } = getPlayerStatsForRound(p, round);
       const prefRank = p[`pos_r${round}`] === p.pos_1st ? '1' : p[`pos_r${round}`] === p.pos_2nd ? '2' : p[`pos_r${round}`] === p.pos_3rd ? '3' : 'R';
       const rankColor = prefRank === '1' ? 'bg-blue-500' : prefRank === '2' ? 'bg-green-500' : 'bg-orange-400';
 
       return (
-        <div className={`flex-1 bg-white border-2 ${isA ? 'border-red-200' : 'border-blue-200'} rounded-[24px] p-2.5 shadow-lg flex flex-col items-center justify-between min-h-[110px]`}>
+        <div className={`flex-1 bg-white border-2 ${isA ? 'border-red-200' : 'border-blue-200'} rounded-[28px] p-3 shadow-lg flex flex-col items-center justify-between min-h-[115px]`}>
           <div className="flex items-center justify-between w-full mb-1">
-            <span className="text-[9px] font-black text-gray-400 uppercase">{posName}</span>
+            <span className="text-[10px] font-black text-gray-400 uppercase leading-none">{posName}</span>
             <span className={`text-[9px] px-1.5 py-0.5 rounded font-black text-white ${rankColor}`}>{prefRank}지망</span>
           </div>
           <span className="text-[14px] font-black text-gray-900 leading-tight truncate w-full text-center">{p.profiles?.full_name}</span>
-          <div className="w-full flex flex-col items-center mt-1 border-t-2 border-gray-50 pt-1.5">
-            <span className="text-[17px] font-black text-gray-900 leading-none mb-1.5">{priorityScore}</span>
+          
+          <div className="w-full flex flex-col items-center mt-1 border-t-2 border-gray-50 pt-2">
+            {/* ✅ 최종 점수를 소수점까지 크게 표시 */}
+            <span className="text-[18px] font-black text-gray-900 leading-none mb-1">{finalScore}</span>
             <div className="flex flex-wrap justify-center gap-1">
               <span className="text-[9px] font-bold text-gray-400">기본100</span>
               {penalty > 0 && <span className="text-[9px] font-black text-red-500">-{penalty}</span>}
               {mileage > 0 && <span className="text-[9px] font-black text-blue-500">+{mileage}</span>}
-              {/* ✅ 변수 점수를 에메랄드색으로 상시 노출 */}
+              {/* ✅ 변수 값을 항상 에메랄드색으로 노출 */}
               <span className="text-[9px] font-black text-emerald-500">+{seed.toFixed(2)}</span>
             </div>
           </div>
@@ -147,12 +157,12 @@ export default function MatchDetailPage() {
     };
 
     return (
-      <div className={`${bgColor} border-2 ${borderColor} rounded-[48px] p-8 space-y-8 shadow-inner`}>
+      <div className={`${bgColor} border-2 ${borderColor} rounded-[56px] p-8 space-y-8 shadow-inner`}>
         <div className="flex justify-between items-center px-4">
-           <p className={`font-black text-lg uppercase tracking-widest ${textColor}`}>{teamType} COURT</p>
+           <p className={`font-black text-xl uppercase tracking-widest ${textColor}`}>{teamType} COURT</p>
            <div className="flex flex-col items-end">
-             <span className="text-[11px] font-black text-gray-400 mb-2 uppercase tracking-tighter">Avg Power: {avgSkill}</span>
-             <div className="w-32 h-2.5 bg-gray-100 rounded-full overflow-hidden shadow-inner">
+             <span className="text-[12px] font-black text-gray-400 mb-2 uppercase tracking-tighter">Avg Power: {avgSkill}</span>
+             <div className="w-36 h-3 bg-gray-100 rounded-full overflow-hidden shadow-inner">
                <div className={`h-full ${isA ? 'bg-red-400' : 'bg-blue-400'} transition-all duration-1000`} style={{ width: `${(avgSkill/90)*100}%` }}></div>
              </div>
            </div>
@@ -214,19 +224,19 @@ export default function MatchDetailPage() {
         const { data, error } = await supabase.from('match_participants').update(payload).eq('id', targetRecord.id).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => prev.map(p => p.id === data[0].id ? data[0] : p));
-        alert('저장되었습니다.');
+        alert('성공적으로 저장되었습니다.');
       } else {
         const { data, error } = await supabase.from('match_participants').insert([{ ...payload, match_id: matchId, user_id: user.id }]).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => [...prev, data[0]]);
-        alert('신청 완료!');
+        alert('신청이 완료되었습니다!');
       }
       setShowPositionModal(false);
-    } catch (e: any) { alert(`오류: ${e.message}`); } finally { setIsSubmitting(false); }
+    } catch (e: any) { alert(`오류 발생: ${e.message}`); } finally { setIsSubmitting(false); }
   };
 
   const generateLineup = async () => {
-    if (!confirm('동점자 변수가 적용된 알고리즘을 가동할까요?')) return;
+    if (!confirm('공평 배정 알고리즘을 가동할까요?')) return;
     const history1st: Record<string, number> = {};
     const mileage: Record<string, number> = {};
     participants.forEach(p => { history1st[p.id] = 0; mileage[p.id] = 0; });
@@ -238,7 +248,7 @@ export default function MatchDetailPage() {
         const sets = p.available_sets?.split(',') || [];
         return sets.includes(setA) || sets.includes(setB);
       }).map(p => {
-        const seed = getSeedValue(p.id, r);
+        const seed = getSeedValue(p.user_id, r);
         const priorityScore = 100 - ((history1st[p.id] || 0) * 10) + (mileage[p.id] || 0) + seed;
         return { ...p, priorityScore, skillScore: getSkill(p.profiles?.skill_level) };
       });
@@ -272,7 +282,7 @@ export default function MatchDetailPage() {
       const finalData = [...assign(teamA).map(res => ({ ...res, team: 'A팀' })), ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))];
       for (const res of finalData) { await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id); }
     }
-    alert('라인업 생성이 완료되었습니다!'); fetchMatchDetails();
+    alert('라인업 생성이 완료되었습니다! 🤖'); fetchMatchDetails();
   };
 
   if (loading) return <div className="p-10 text-center font-bold">데이터 로딩 중...</div>;
@@ -290,7 +300,7 @@ export default function MatchDetailPage() {
               {match.is_lineup_visible ? <EyeOff /> : <Eye className="text-sport-blue"/>}
             </button>
             <button onClick={() => router.push(`/match/${matchId}/edit`)}><Edit3 /></button>
-            <button onClick={() => { if(confirm('삭제?')) supabase.from('matches').delete().eq('id', matchId).then(() => router.push('/')) }}><Trash2 className="text-red-500" /></button>
+            <button onClick={() => { if(confirm('매치를 삭제하시겠습니까?')) supabase.from('matches').delete().eq('id', matchId).then(() => router.push('/')) }}><Trash2 className="text-red-500" /></button>
           </div>
         )}
       </header>
@@ -315,9 +325,7 @@ export default function MatchDetailPage() {
             </div>
 
             <section className="space-y-4">
-              <h3 className="font-black text-lg px-2 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-sport-blue" /> 실시간 포지션 경쟁률
-              </h3>
+              <h3 className="font-black text-lg px-2 flex items-center gap-2"><BarChart3 className="w-5 h-5 text-sport-blue" /> 실시간 포지션 경쟁률</h3>
               <div className="grid grid-cols-3 gap-2">
                 {positionStats.map((stat, idx) => (
                   <div key={idx} className="bg-white p-3 rounded-[24px] border shadow-sm flex flex-col items-center justify-center">
@@ -337,7 +345,7 @@ export default function MatchDetailPage() {
 
             {isManager && (
               <button onClick={generateLineup} className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all">
-                <Zap className="text-yellow-400 fill-yellow-400 w-5 h-5"/> 알고리즘 라인업 가동
+                <Zap className="text-yellow-400 fill-yellow-400 w-5 h-5"/> 알고리즘 라인업 생성
               </button>
             )}
 
@@ -350,9 +358,7 @@ export default function MatchDetailPage() {
                   </div>
                   <div className="flex-1 font-black">
                     <p className="text-base text-gray-900">{maskName(p.profiles?.full_name)}</p>
-                    <p className="text-[10px] text-gray-400 font-bold">
-                      {sortSets(p.available_sets?.split(',') || []).join(', ')}세트
-                    </p>
+                    <p className="text-[10px] text-gray-400 font-bold">{sortSets(p.available_sets?.split(',') || []).join(', ')}세트</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-[11px] font-black text-sport-blue bg-blue-50 px-3 py-2 rounded-xl border border-blue-100">{p.pos_1st}</div>
@@ -364,42 +370,30 @@ export default function MatchDetailPage() {
           </>
         ) : (
           <div className="space-y-6">
-            {/* 📘 알고리즘 배정방식 안내 가이드 */}
+            {/* 📘 알고리즘 배정방식 가이드 */}
             <div className="bg-white border-2 border-sport-blue/20 rounded-[32px] overflow-hidden shadow-sm">
-              <button 
-                onClick={() => setShowAlgoGuide(!showAlgoGuide)}
-                className="w-full p-5 flex items-center justify-between bg-blue-50/30 hover:bg-blue-50 transition-colors"
-              >
+              <button onClick={() => setShowAlgoGuide(!showAlgoGuide)} className="w-full p-5 flex items-center justify-between bg-blue-50/30 hover:bg-blue-50 transition-colors">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-sport-blue rounded-full flex items-center justify-center">
-                    <Info className="w-5 h-5 text-white" />
-                  </div>
+                  <div className="w-8 h-8 bg-sport-blue rounded-full flex items-center justify-center"><Info className="w-5 h-5 text-white" /></div>
                   <span className="font-black text-gray-800 text-sm">여순광 공평 배정 알고리즘 원리</span>
                 </div>
                 {showAlgoGuide ? <ChevronUp className="text-gray-400"/> : <ChevronDown className="text-gray-400"/>}
               </button>
-              
               {showAlgoGuide && (
-                <div className="p-6 bg-white space-y-5 animate-in fade-in slide-in-from-top-1 duration-200">
+                <div className="p-6 bg-white space-y-5">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <p className="text-[11px] font-black text-red-500 uppercase">점수 감점 (-)</p>
-                      <p className="text-[13px] font-bold text-gray-600 leading-relaxed">
-                        이전 라운드에서 <span className="text-gray-900">1순위 포지션</span>에 배정될 때마다 <span className="text-red-500">-10점</span>이 누적됩니다.
-                      </p>
+                      <p className="text-[13px] font-bold text-gray-600 leading-relaxed">이전 라운드 <span className="text-gray-900">1순위 포지션</span> 배정 시마다 <span className="text-red-500">-10점</span>이 누적됩니다.</p>
                     </div>
                     <div className="space-y-2">
                       <p className="text-[11px] font-black text-blue-500 uppercase">점수 가점 (+)</p>
-                      <p className="text-[13px] font-bold text-gray-600 leading-relaxed">
-                        대기(<span className="text-blue-500">+10</span>), 3순위(<span className="text-blue-500">+5</span>), 2순위(<span className="text-blue-500">+3</span>) 수행 시 마일리지가 쌓입니다.
-                      </p>
+                      <p className="text-[13px] font-bold text-gray-600 leading-relaxed">대기(<span className="text-blue-500">+10</span>), 3순위(<span className="text-blue-500">+5</span>), 2순위(<span className="text-blue-500">+3</span>) 수행 시 마일리지가 쌓입니다.</p>
                     </div>
                   </div>
                   <div className="pt-4 border-t border-gray-50">
                     <p className="text-[11px] font-black text-emerald-500 uppercase mb-2">변수(Seed) 생성 원리</p>
-                    <p className="text-[13px] font-bold text-gray-600 leading-relaxed">
-                      모든 참가자의 점수가 같을 경우를 대비해, <span className="text-gray-900">유저 고유ID와 해당 라운드 번호</span>를 조합한 소수점 랜덤값(0~1)이 매 라운드 새롭게 부여됩니다.
-                    </p>
+                    <p className="text-[13px] font-bold text-gray-600 leading-relaxed">모든 참가자의 점수가 같을 경우를 대비해, <span className="text-gray-900">고유ID와 라운드 번호</span>를 조합한 소수점 랜덤값(0~1)이 매 라운드 새롭게 부여됩니다.</p>
                   </div>
                 </div>
               )}
@@ -407,7 +401,7 @@ export default function MatchDetailPage() {
 
             <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide px-1">
               {[1, 2, 3, 4].map(r => (
-                <button key={r} onClick={() => setActiveRound(r)} className={`px-7 py-3.5 rounded-full font-black text-sm whitespace-nowrap transition-all border-2 ${activeRound === r ? 'bg-sport-blue border-sport-blue text-white shadow-xl scale-105' : 'bg-white border-gray-100 text-gray-400'}`}>
+                <button key={r} onClick={() => setActiveRound(r)} className={`px-7 py-3.5 rounded-full font-black text-sm whitespace-nowrap transition-all border-2 ${activeRound === r ? 'bg-sport-blue border-sport-blue text-white shadow-xl' : 'bg-white border-gray-100 text-gray-400'}`}>
                   {r*2-1}·{r*2} SET
                 </button>
               ))}
@@ -418,16 +412,14 @@ export default function MatchDetailPage() {
                 <CourtView teamPlayers={participants.filter(p => p[`team_r${activeRound}`] === 'A팀')} teamType="A팀" round={activeRound} />
                 <div className="flex items-center justify-center py-2">
                   <div className="h-[3px] bg-gray-200 flex-1 rounded-full"></div>
-                  <span className="px-8 text-[11px] font-black text-gray-300 uppercase tracking-[0.2em]">Net Center</span>
+                  <span className="px-8 text-[11px] font-black text-gray-300 uppercase tracking-widest">Net Center</span>
                   <div className="h-[3px] bg-gray-200 flex-1 rounded-full"></div>
                 </div>
                 <CourtView teamPlayers={participants.filter(p => p[`team_r${activeRound}`] === 'B팀')} teamType="B팀" round={activeRound} />
 
                 { participants.some(p => p[`pos_r${activeRound}`] === '대기') && (
                   <div className="bg-white p-8 rounded-[48px] border-2 border-dashed border-gray-200 shadow-sm">
-                    <p className="text-[12px] font-black text-gray-400 mb-5 flex items-center gap-2 uppercase tracking-wide">
-                      <Clock className="w-5 h-5"/> 대기 선수 명단 (마일리지 보상 +10)
-                    </p>
+                    <p className="text-[12px] font-black text-gray-400 mb-5 flex items-center gap-2 uppercase tracking-wide"><Clock className="w-5 h-5"/> 대기 선수 명단 (보상 +10)</p>
                     <div className="grid grid-cols-2 gap-4">
                       {participants.filter(p => p[`pos_r${activeRound}`] === '대기').map(p => (
                         <div key={p.id} className="bg-gray-50 p-4 rounded-3xl text-center border border-gray-100">
@@ -447,13 +439,10 @@ export default function MatchDetailPage() {
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-lg rounded-[48px] p-10 max-h-[85vh] overflow-y-auto shadow-2xl">
-            <div className="flex justify-between items-center mb-8">
-              <h3 className="text-2xl font-black text-gray-900">{editingParticipant ? `${editingParticipant.profiles?.full_name}님 정보 수정` : '매치 참가 신청'}</h3>
-              <button onClick={() => setShowPositionModal(false)} className="p-2.5 bg-gray-50 rounded-full text-gray-400"><X /></button>
-            </div>
+            <h3 className="text-2xl font-black mb-8">{editingParticipant ? `${editingParticipant.profiles?.full_name}님 정보 수정` : '매치 참가 신청'}</h3>
             <div className="space-y-8">
               <div>
-                <label className="text-sm font-black mb-4 block text-gray-600 ml-1">참여 가능한 세트</label>
+                <label className="text-sm font-black mb-4 block text-gray-600">참여 가능한 세트</label>
                 <div className="grid grid-cols-4 gap-2">
                   {["1","2","3","4","5","6","7","8"].map(s => (
                     <button key={s} onClick={() => {
