@@ -42,112 +42,122 @@ export default function MatchDetailPage() {
       setLoading(true);
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       setUser(currentUser);
-
       if (currentUser) {
-        await supabase.from('profiles').upsert({
-          id: currentUser.id,
-          full_name: currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || '사용자',
-          avatar_url: currentUser.user_metadata?.avatar_url || '',
-        });
         const { data: profileData } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
         setUserProfile(profileData);
       }
-
       const { data: matchData } = await supabase.from('matches').select('*').eq('id', matchId).single();
       setMatch(matchData);
-
-      const { data: partData } = await supabase.from('match_participants')
-        .select('*, profiles(full_name, avatar_url, skill_level)')
-        .eq('match_id', matchId);
+      const { data: partData } = await supabase.from('match_participants').select('*, profiles(*)').eq('match_id', matchId);
       setParticipants(partData || []);
-    } catch (error) {
-      console.error('데이터 로딩 에러:', error);
-    } finally {
-      setLoading(false);
-    }
+    } catch (error) { console.error(error); } finally { setLoading(false); }
   }, [matchId]);
 
-  useEffect(() => {
-    fetchMatchDetails();
-  }, [fetchMatchDetails]);
+  useEffect(() => { fetchMatchDetails(); }, [fetchMatchDetails]);
 
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // --- 🧠 희성님 운영 방식 기반 알고리즘 ---
+  // --- 🏐 공평 배정 알고리즘 (평등 시작점 100점 + 랜덤 변수 0~1) ---
   const generateLineup = async () => {
-    if (!confirm('운영 로직에 따라 4라운드 라인업을 생성하시겠습니까?')) return;
+    if (!confirm('모든 인원이 공평하게 100점에서 시작하는 로직으로 라인업을 생성하시겠습니까?')) return;
     
-    // 1. 모든 참가자 점수화
-    const getSkillScore = (level: string) => ({ '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 }[level] || 50);
-    
-    // 2. 라운드별 배정 시작 (R1~R4)
+    const history1st: Record<string, number> = {};
+    const mileage: Record<string, number> = {};
+    participants.forEach(p => { 
+      history1st[p.id] = 0; 
+      mileage[p.id] = 0; 
+    });
+
+    const getSkillScore = (lvl: string) => ({ '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 }[lvl] || 50);
+
     for (let r = 1; r <= 4; r++) {
-      // 해당 라운드 세트 (R1: 1,2 / R2: 3,4 / R3: 5,6 / R4: 7,8)
       const setA = String(r * 2 - 1);
       const setB = String(r * 2);
 
-      // 이번 라운드에 참가 가능한 사람만 필터링
-      const availablePlayers = participants.filter(p => {
-        const userSets = p.available_sets?.split(',') || [];
-        return userSets.includes(setA) || userSets.includes(setB);
-      }).map(p => ({
-        ...p,
-        tempScore: getSkillScore(p.profiles?.skill_level) + (p.pos_3rd !== '선택 안함' ? 5 : 0) + (Math.random() * 5)
-      })).sort((a, b) => b.tempScore - a.tempScore);
+      const pool = participants.filter(p => {
+        const sets = p.available_sets?.split(',') || [];
+        return sets.includes(setA) || sets.includes(setB);
+      }).map(p => {
+        const baseScore = 100; 
+        const penalty = (history1st[p.id] || 0) * 10;
+        const bonus = (mileage[p.id] || 0);
+        // 요청하신 대로 변수의 범위는 0~1 사이로 설정했습니다.
+        const randomSeed = Math.random(); 
 
-      if (availablePlayers.length < 12) {
-        console.warn(`${r}라운드 인원 부족 (${availablePlayers.length}명)`);
-      }
+        return { 
+          ...p, 
+          priorityScore: baseScore - penalty + bonus + randomSeed,
+          skillScore: getSkillScore(p.profiles?.skill_level)
+        };
+      });
 
-      // 실력 순 A-B-B-A 배정
+      if (pool.length < 6) continue;
+
+      const sortedBySkill = [...pool].sort((a, b) => b.skillScore - a.skillScore);
       const teamA: any[] = [];
       const teamB: any[] = [];
-      availablePlayers.forEach((p, idx) => {
+      sortedBySkill.forEach((p, idx) => {
         if (idx % 4 === 0 || idx % 4 === 3) teamA.push(p);
         else teamB.push(p);
       });
 
-      // 포지션 배정 함수
       const assign = (team: any[]) => {
-        let pool = [...REAL_POSITIONS];
-        let result: any[] = [];
-        team.forEach(p => {
-          let finalPos: string | null = null;
-          const prefs = [p.pos_1st, p.pos_2nd, p.pos_3rd].filter(v => v && v !== '선택 안함' && v !== '상관없음');
-          for (let pr of prefs) { if (pool.includes(pr)) { finalPos = pr; break; } }
-          
-          if (!finalPos) {
-            const safe = pool.filter(v => v !== p.pos_exclude);
-            finalPos = safe.length > 0 ? safe[Math.floor(Math.random() * safe.length)] : (pool[0] || '대기');
+        const sortedTeam = [...team].sort((a, b) => b.priorityScore - a.priorityScore);
+        let remainingPos = [...REAL_POSITIONS];
+        const results: any[] = [];
+
+        sortedTeam.forEach(p => {
+          let finalPos = "대기";
+          let matchType = "wait";
+          const wishes = [
+            { pos: p.pos_1st, type: "1st" },
+            { pos: p.pos_2nd, type: "2nd" },
+            { pos: p.pos_3rd, type: "3rd" }
+          ].filter(w => w.pos && w.pos !== "선택 안함" && w.pos !== "상관없음");
+
+          for (const wish of wishes) {
+            if (remainingPos.includes(wish.pos)) {
+              finalPos = wish.pos;
+              matchType = wish.type;
+              break;
+            }
           }
-          if (finalPos !== '대기') pool = pool.filter(v => v !== finalPos);
-          result.push({ id: p.id, pos: finalPos });
+
+          if (finalPos === "대기" && remainingPos.length > 0) {
+            const safePos = remainingPos.filter(pos => pos !== p.pos_exclude);
+            finalPos = safePos.length > 0 ? safePos[Math.floor(Math.random() * safePos.length)] : remainingPos[0];
+            matchType = "random";
+          }
+
+          if (finalPos !== "대기") {
+            remainingPos = remainingPos.filter(v => v !== finalPos);
+          }
+
+          if (matchType === "1st") history1st[p.id]++;
+          else if (matchType === "2nd") mileage[p.id] += 3;
+          else if (matchType === "3rd") mileage[p.id] += 5;
+          else if (matchType === "wait" || matchType === "random") mileage[p.id] += 10;
+
+          results.push({ id: p.id, pos: finalPos });
         });
-        return result;
+        return results;
       };
 
-      const finalResults = [
+      const finalRoundData = [
         ...assign(teamA).map(res => ({ ...res, team: 'A팀' })),
         ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))
       ];
 
-      // DB 업데이트
-      for (const res of finalResults) {
+      for (const res of finalRoundData) {
         await supabase.from('match_participants').update({
           [`team_r${r}`]: res.team,
           [`pos_r${r}`]: res.pos
         }).eq('id', res.id);
       }
     }
-    alert('4라운드 라인업 생성이 완료되었습니다! 🤖');
-    fetchMatchDetails(); // 데이터 새로고침
-  };
-
-  const deleteMatch = async () => {
-    if (!confirm('매치를 삭제하시겠습니까?')) return;
-    await supabase.from('matches').delete().eq('id', matchId);
-    router.push('/');
+    alert('라인업 생성이 완료되었습니다! 🤖');
+    fetchMatchDetails();
   };
 
   const submitJoin = async () => {
@@ -158,11 +168,8 @@ export default function MatchDetailPage() {
       pos_exclude: joinForm.pos_exclude,
       available_sets: joinForm.available_sets.join(',')
     };
-    if (isJoined) {
-      await supabase.from('match_participants').update(payload).eq('match_id', matchId).eq('user_id', user.id);
-    } else {
-      await supabase.from('match_participants').insert([payload]);
-    }
+    if (isJoined) await supabase.from('match_participants').update(payload).eq('match_id', matchId).eq('user_id', user.id);
+    else await supabase.from('match_participants').insert([payload]);
     setShowPositionModal(false);
     fetchMatchDetails();
   };
@@ -182,7 +189,7 @@ export default function MatchDetailPage() {
               {match.is_lineup_visible ? <EyeOff /> : <Eye className="text-sport-blue"/>}
             </button>
             <button onClick={() => router.push(`/match/${matchId}/edit`)}><Edit3 /></button>
-            <button onClick={deleteMatch}><Trash2 className="text-red-500" /></button>
+            <button onClick={() => { if(confirm('삭제?')) supabase.from('matches').delete().eq('id', matchId).then(() => router.push('/')) }}><Trash2 className="text-red-500" /></button>
           </div>
         )}
       </header>
@@ -197,39 +204,30 @@ export default function MatchDetailPage() {
       <main className="max-w-lg mx-auto p-4 space-y-6">
         {activeTab === 'info' ? (
           <>
-            <div className="bg-white p-6 rounded-3xl shadow-sm border">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border font-bold">
                <h2 className="text-2xl font-black mb-4">{match.title}</h2>
-               <div className="space-y-2 text-sm font-bold text-gray-500">
-                 <p className="flex items-center gap-2"><Calendar className="w-4 h-4 text-sport-blue"/> {format(new Date(match.match_date), 'M월 d일 HH:mm', { locale: ko })}</p>
-                 <p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-sport-blue"/> {match.location}</p>
-                 <p className="flex items-center gap-2"><Users className="w-4 h-4 text-sport-blue"/> {participants.length} / {match.max_participants}명</p>
-               </div>
+               <p className="flex items-center gap-2 text-gray-500"><Calendar className="w-4 h-4"/> {match.match_date}</p>
+               <p className="flex items-center gap-2 text-gray-500"><MapPin className="w-4 h-4"/> {match.location}</p>
             </div>
-
             {isManager && (
               <button onClick={generateLineup} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl flex items-center justify-center gap-2">
                 <Zap className="text-yellow-400 fill-yellow-400"/> 알고리즘 라인업 생성
               </button>
             )}
-
-            <div>
-              <h3 className="font-black text-lg mb-4">신청자 명단 ({participants.length}명)</h3>
-              <div className="grid grid-cols-1 gap-2">
-                {participants.map((p, idx) => (
-                  <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border shadow-sm">
-                    <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center shrink-0">
-                      {p.profiles?.avatar_url ? <img src={p.profiles.avatar_url} className="rounded-full" /> : <User className="text-sport-blue"/>}
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-bold">{p.profiles?.full_name}</p>
-                      <p className="text-[10px] text-gray-400 font-bold">{p.available_sets || '전체'} 세트 참여</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs font-bold text-sport-blue">{p.pos_1st}</p>
-                    </div>
+            <div className="space-y-2">
+              <h3 className="font-black text-lg">신청자 명단 ({participants.length}명)</h3>
+              {participants.map((p, idx) => (
+                <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border">
+                  <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center font-bold text-sport-blue text-xs overflow-hidden">
+                    {p.profiles?.avatar_url ? <img src={p.profiles.avatar_url} className="w-full h-full object-cover" /> : p.profiles?.full_name?.[0]}
                   </div>
-                ))}
-              </div>
+                  <div className="flex-1 font-bold">
+                    <p className="text-sm">{p.profiles?.full_name}</p>
+                    <p className="text-[10px] text-gray-400">{p.available_sets}세트 참여</p>
+                  </div>
+                  <div className="text-xs font-bold text-sport-blue bg-blue-50 px-2 py-1 rounded-lg">{p.pos_1st}</div>
+                </div>
+              ))}
             </div>
           </>
         ) : (
@@ -240,12 +238,12 @@ export default function MatchDetailPage() {
                   <h3 className="font-black text-lg text-sport-blue bg-blue-50 p-3 rounded-xl inline-block">{r*2-1}·{r*2}세트 라인업</h3>
                   <div className="grid grid-cols-1 gap-3">
                     {['A팀', 'B팀'].map(t => (
-                      <div key={t} className={`p-4 rounded-3xl border-2 ${t === 'A팀' ? 'bg-red-50/50 border-red-100' : 'bg-blue-50/50 border-blue-100'}`}>
+                      <div key={t} className={`p-4 rounded-3xl border-2 ${t === 'A팀' ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'}`}>
                         <p className={`font-black text-xs mb-3 ${t === 'A팀' ? 'text-red-500' : 'text-blue-500'}`}>{t} 코트</p>
                         <div className="grid grid-cols-3 gap-2">
                           {participants.filter(p => p[`team_r${r}`] === t).map(p => (
-                            <div key={p.id} className="bg-white p-2 rounded-xl shadow-sm text-center border border-gray-100">
-                              <p className="text-[9px] text-gray-400 font-black mb-1">{p[`pos_r${r}`]}</p>
+                            <div key={p.id} className="bg-white p-2 rounded-xl text-center border">
+                              <p className="text-[9px] text-gray-400 font-bold">{p[`pos_r${r}`]}</p>
                               <p className="text-xs font-bold truncate">{p.profiles?.full_name}</p>
                             </div>
                           ))}
@@ -255,9 +253,7 @@ export default function MatchDetailPage() {
                   </div>
                 </div>
               ))
-            ) : (
-              <div className="text-center py-20 text-gray-400 font-bold">라인업이 아직 비공개입니다.</div>
-            )}
+            ) : <div className="py-20 text-center font-bold text-gray-400">라인업 비공개</div>}
           </div>
         )}
       </main>
@@ -265,39 +261,42 @@ export default function MatchDetailPage() {
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-[32px] p-6 max-h-[85vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-black">포지션 희망서</h3>
-              <button onClick={() => setShowPositionModal(false)}><X /></button>
-            </div>
+            <h3 className="text-2xl font-black mb-6">참가 신청</h3>
             <div className="space-y-6">
               <div>
-                <label className="text-sm font-black mb-3 block">참가 가능 세트 (최대 8세트)</label>
+                <label className="text-sm font-black mb-2 block text-gray-600">참가 가능 세트 (다중 선택)</label>
                 <div className="flex flex-wrap gap-2">
                   {["1","2","3","4","5","6","7","8"].map(s => (
                     <button key={s} onClick={() => {
                       const curr = joinForm.available_sets;
                       setJoinForm({...joinForm, available_sets: curr.includes(s) ? curr.filter(v => v !== s) : [...curr, s]});
-                    }} className={`px-4 py-2 rounded-xl font-bold border-2 ${joinForm.available_sets.includes(s) ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100'}`}>{s}세트</button>
+                    }} className={`px-4 py-2 rounded-xl font-bold border-2 transition-all ${joinForm.available_sets.includes(s) ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-sm' : 'border-gray-100 bg-white text-gray-400'}`}>{s}세트</button>
                   ))}
                 </div>
               </div>
-              <div className="grid grid-cols-1 gap-4">
-                <div><label className="text-xs font-black text-gray-400">1순위</label>
-                <select className="w-full p-4 rounded-2xl border-2 font-bold" value={joinForm.pos_1st} onChange={e => setJoinForm({...joinForm, pos_1st: e.target.value})}>
-                  {VOLLEYBALL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                </select></div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div><label className="text-xs font-black text-gray-400">2순위</label>
-                  <select className="w-full p-4 rounded-2xl border-2 font-bold" value={joinForm.pos_2nd} onChange={e => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
-                    {OPTIONAL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select></div>
-                  <div><label className="text-xs font-black text-gray-400">3순위</label>
-                  <select className="w-full p-4 rounded-2xl border-2 font-bold" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
-                    {BONUS_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select></div>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-black text-gray-400 ml-1">1순위 희망 포지션</label>
+                  <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_1st} onChange={e => setJoinForm({...joinForm, pos_1st: e.target.value})}>
+                    {VOLLEYBALL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-black text-gray-400 ml-1">2순위</label>
+                    <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_2nd} onChange={e => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
+                      {OPTIONAL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-black text-gray-400 ml-1">3순위</label>
+                    <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
+                      {BONUS_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
                 </div>
               </div>
-              <button onClick={submitJoin} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black">신청 완료</button>
+              <button onClick={submitJoin} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl active:scale-95 transition-all">신청 완료</button>
             </div>
           </div>
         </div>
@@ -308,12 +307,12 @@ export default function MatchDetailPage() {
           if (isJoined) {
             const my = participants.find(p => p.user_id === user.id);
             setJoinForm({
-              pos_1st: my.pos_1st, pos_2nd: my.pos_2nd, pos_3rd: my.pos_3rd, pos_exclude: my.pos_exclude,
+              pos_1st: my.pos_1st, pos_2nd: my.pos_2nd, pos_3rd: my.pos_3rd, pos_exclude: my.pos_exclude || '선택 안함',
               available_sets: my.available_sets?.split(',') || []
             });
           }
           setShowPositionModal(true);
-        }} className="w-full py-5 rounded-2xl font-black bg-sport-blue text-white shadow-xl">
+        }} className="w-full py-5 rounded-2xl font-black bg-sport-blue text-white shadow-xl active:scale-95 transition-all">
           {isJoined ? '신청 내용 수정' : '지금 참가 신청하기'}
         </button>
       </div>
