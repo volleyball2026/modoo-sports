@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { BottomNav } from '@/components/bottom-nav';
@@ -16,11 +16,10 @@ const VOLLEYBALL_POSITIONS = [...REAL_POSITIONS, "상관없음"];
 const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
 const BONUS_POSITIONS = ["선택 안함", "속공", "레프트백", "센터백", "라이트백"];
 
-const anonymizeName = (name: string) => {
+// 이름 가리기 헬퍼 (이희성 -> 이**) - 정보 탭용
+const maskName = (name: string) => {
   if (!name) return "";
-  if (name.length <= 1) return name;
-  if (name.length === 2) return name[0] + "O";
-  return name[0] + "O" + name.slice(2);
+  return name[0] + "*".repeat(Math.max(0, name.length - 1));
 };
 
 export default function MatchDetailPage() {
@@ -43,17 +42,12 @@ export default function MatchDetailPage() {
     available_sets: [] as string[] 
   });
 
-  // ✅ 세트 번호를 안전하게 정렬하는 함수 (타입 명시)
   const sortSets = (setsArray: string[]) => {
-    return [...setsArray]
-      .filter(Boolean)
-      .sort((a: string, b: string) => {
-        const numA = parseInt(a);
-        const numB = parseInt(b);
-        if (isNaN(numA)) return 1;
-        if (isNaN(numB)) return -1;
-        return numA - numB;
-      });
+    return [...setsArray].filter(Boolean).sort((a: string, b: string) => {
+      const numA = parseInt(a); const numB = parseInt(b);
+      if (isNaN(numA)) return 1; if (isNaN(numB)) return -1;
+      return numA - numB;
+    });
   };
 
   const fetchMatchDetails = useCallback(async () => {
@@ -73,12 +67,26 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
+  // --- 🚦 실시간 포지션 경쟁률 계산 ---
+  const positionStats = useMemo(() => {
+    const stats = REAL_POSITIONS.map(pos => {
+      const count1st = participants.filter(p => p.pos_1st === pos).length;
+      const count2nd = participants.filter(p => p.pos_2nd === pos).length;
+      const count3rd = participants.filter(p => p.pos_3rd === pos).length;
+      let status = '여유';
+      let statusClass = 'text-green-500 bg-green-50';
+      if (count1st >= 3) { status = '혼잡'; statusClass = 'text-red-500 bg-red-50'; }
+      else if (count1st === 0) { status = '빈집'; statusClass = 'text-blue-500 bg-blue-50'; }
+      return { pos, count1st, count2nd, count3rd, status, statusClass };
+    });
+    return stats;
+  }, [participants]);
+
   const getPlayerStatsForRound = (player: any, round: number) => {
     const skillMap: any = { '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 };
     const skillScore = skillMap[player.profiles?.skill_level] || 50;
     let penaltyCount = 0;
     let mileage = 0;
-
     for (let r = 1; r < round; r++) {
       const assigned = player[`pos_r${r}`];
       if (!assigned) continue;
@@ -88,10 +96,9 @@ export default function MatchDetailPage() {
       else if (assigned === player.pos_2nd) mileage += 3;
       else mileage += 3;
     }
-
     const priorityScore = 100 - (penaltyCount * 10) + mileage;
-    const weightText = `기본(100) ${penaltyCount > 0 ? `-${penaltyCount*10}` : ''} ${mileage > 0 ? `+${mileage}` : ''}`;
-    return { skillScore, priorityScore, weightText };
+    // 시각화를 위해 사유 텍스트를 파싱 가능한 형태로 유지
+    return { skillScore, priorityScore, penalty: penaltyCount * 10, mileage };
   };
 
   const CourtView = ({ teamPlayers, teamType, round }: { teamPlayers: any[], teamType: string, round: number }) => {
@@ -108,44 +115,49 @@ export default function MatchDetailPage() {
     const renderPlayer = (posName: string) => {
       const p = teamPlayers.find(player => player[`pos_r${round}`] === posName);
       if (!p) return (
-        <div className="flex-1 border border-dashed border-gray-200 rounded-xl p-1 min-h-[70px] flex flex-col items-center justify-center opacity-30">
-          <span className="text-[7px] font-black text-gray-400 uppercase tracking-tighter">{posName}</span>
+        <div className="flex-1 border border-dashed border-gray-200 rounded-xl p-1 min-h-[85px] flex items-center justify-center opacity-30">
+          <span className="text-[8px] font-black text-gray-400 uppercase">{posName}</span>
         </div>
       );
 
-      const { priorityScore, weightText } = getPlayerStatsForRound(p, round);
+      const { priorityScore, penalty, mileage } = getPlayerStatsForRound(p, round);
       const prefRank = p[`pos_r${round}`] === p.pos_1st ? '1' : p[`pos_r${round}`] === p.pos_2nd ? '2' : p[`pos_r${round}`] === p.pos_3rd ? '3' : 'R';
       const rankColor = prefRank === '1' ? 'bg-blue-500' : prefRank === '2' ? 'bg-green-500' : 'bg-orange-400';
 
       return (
-        <div className={`flex-1 bg-white border ${isA ? 'border-red-200' : 'border-blue-200'} rounded-xl p-1.5 shadow-sm flex flex-col items-center justify-center min-h-[70px]`}>
-          <div className="flex items-center gap-1 mb-1">
-            <span className="text-[7px] font-black text-gray-400 uppercase tracking-tighter">{posName}</span>
-            <span className={`text-[7px] px-1 rounded-sm font-black text-white ${rankColor}`}>{prefRank}</span>
+        <div className={`flex-1 bg-white border-2 ${isA ? 'border-red-200' : 'border-blue-200'} rounded-xl p-2 shadow-md flex flex-col items-center justify-between min-h-[90px]`}>
+          <div className="flex items-center justify-between w-full mb-1">
+            <span className="text-[8px] font-black text-gray-400 uppercase">{posName}</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded font-black text-white ${rankColor}`}>{prefRank}순위</span>
           </div>
-          <span className="text-[11px] font-black text-gray-800 leading-tight mb-0.5 truncate w-full text-center">{anonymizeName(p.profiles?.full_name)}</span>
-          <div className="w-full h-[1px] bg-gray-50 my-1"></div>
-          <span className="text-[9px] font-black text-gray-900 leading-none">{priorityScore.toFixed(0)}</span>
-          <span className="text-[6px] font-bold text-gray-300 mt-1 scale-90">{weightText}</span>
+          {/* 코트 라인업에서는 본명 노출 */}
+          <span className="text-[13px] font-black text-gray-900 leading-tight truncate w-full text-center">{p.profiles?.full_name}</span>
+          <div className="w-full flex flex-col items-center mt-1 border-t border-gray-100 pt-1">
+            <span className="text-[15px] font-black text-gray-900">{priorityScore}</span>
+            <div className="flex gap-1 mt-0.5">
+              {penalty > 0 && <span className="text-[9px] font-black text-red-500">-{penalty}</span>}
+              {mileage > 0 && <span className="text-[9px] font-black text-blue-500">+{mileage}</span>}
+            </div>
+          </div>
         </div>
       );
     };
 
     return (
-      <div className={`${bgColor} border-2 ${borderColor} rounded-[40px] p-6 space-y-5 shadow-inner`}>
+      <div className={`${bgColor} border-2 ${borderColor} rounded-[40px] p-6 space-y-6 shadow-inner`}>
         <div className="flex justify-between items-center px-2">
-           <p className={`font-black text-sm uppercase tracking-widest ${textColor}`}>{teamType} COURT</p>
+           <p className={`font-black text-base uppercase tracking-widest ${textColor}`}>{teamType} COURT</p>
            <div className="flex flex-col items-end">
-             <span className="text-[9px] font-black text-gray-400 mb-1">POWER: {avgSkill}</span>
-             <div className="w-16 h-1 bg-gray-100 rounded-full overflow-hidden">
+             <span className="text-[10px] font-black text-gray-400 mb-1.5 uppercase">Average Power: {avgSkill}</span>
+             <div className="w-24 h-2 bg-gray-100 rounded-full overflow-hidden shadow-inner">
                <div className={`h-full ${isA ? 'bg-red-400' : 'bg-blue-400'}`} style={{ width: `${(avgSkill/90)*100}%` }}></div>
              </div>
            </div>
         </div>
-        <div className="space-y-2">
-          <div className="flex gap-2">{renderPlayer('레프트')}{renderPlayer('속공')}{renderPlayer('세터')}{renderPlayer('라이트')}</div>
-          <div className="flex justify-center gap-2 px-8">{renderPlayer('앞차')}{renderPlayer('백차')}</div>
-          <div className="flex gap-2">{renderPlayer('레프트백')}{renderPlayer('센터백')}{renderPlayer('라이트백')}</div>
+        <div className="space-y-3">
+          <div className="flex gap-2.5">{renderPlayer('레프트')}{renderPlayer('속공')}{renderPlayer('세터')}{renderPlayer('라이트')}</div>
+          <div className="flex justify-center gap-2.5 px-10">{renderPlayer('앞차')}{renderPlayer('백차')}</div>
+          <div className="flex gap-2.5">{renderPlayer('레프트백')}{renderPlayer('센터백')}{renderPlayer('라이트백')}</div>
         </div>
       </div>
     );
@@ -244,7 +256,7 @@ export default function MatchDetailPage() {
       const finalData = [...assign(teamA).map(res => ({ ...res, team: 'A팀' })), ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))];
       for (const res of finalData) { await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id); }
     }
-    alert('라인업 생성이 완료되었습니다!'); fetchMatchDetails();
+    alert('4라운드 라인업 생성이 완료되었습니다!'); fetchMatchDetails();
   };
 
   if (loading) return <div className="p-10 text-center font-bold">로딩 중...</div>;
@@ -274,33 +286,57 @@ export default function MatchDetailPage() {
         </div>
       </div>
 
-      <main className="max-w-lg mx-auto p-4 space-y-6">
+      <main className="max-w-lg mx-auto p-4 space-y-8">
         {activeTab === 'info' ? (
           <>
             <div className="bg-white p-6 rounded-[32px] shadow-sm border font-bold">
                <h2 className="text-2xl font-black mb-4 leading-tight">{match.title}</h2>
                <div className="space-y-1.5 text-sm text-gray-500">
-                 <p className="flex items-center gap-2"><Calendar className="w-4 h-4 text-sport-blue"/> {match.match_date}</p>
-                 <p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-sport-blue"/> {match.location}</p>
-                 <p className="flex items-center gap-2"><Users className="w-4 h-4 text-sport-blue"/> {participants.length}명 신청 완료</p>
+                 <p className="flex items-center gap-2 font-black"><Calendar className="w-4 h-4 text-sport-blue"/> {match.match_date}</p>
+                 <p className="flex items-center gap-2 font-black"><MapPin className="w-4 h-4 text-sport-blue"/> {match.location}</p>
+                 <p className="flex items-center gap-2 font-black"><Users className="w-4 h-4 text-sport-blue"/> {participants.length}명 신청 완료</p>
                </div>
             </div>
+
+            {/* 🚦 부활한 포지션 현황판 */}
+            <section className="space-y-4">
+              <h3 className="font-black text-lg px-1 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-sport-blue" /> 실시간 포지션 경쟁률
+              </h3>
+              <div className="grid grid-cols-3 gap-2">
+                {positionStats.map((stat, idx) => (
+                  <div key={idx} className="bg-white p-3 rounded-2xl border shadow-sm flex flex-col items-center justify-center">
+                    <div className="flex items-center gap-1 mb-1.5">
+                      <span className="font-bold text-[11px] text-gray-700">{stat.pos}</span>
+                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${stat.statusClass}`}>{stat.status}</span>
+                    </div>
+                    <p className="text-xl font-black text-gray-900 mb-1">{stat.count1st}<span className="text-xs text-gray-400 ml-0.5 font-bold">명</span></p>
+                    <div className="w-full flex justify-between text-[9px] text-gray-400 font-bold px-1.5">
+                      <span>2지망 <span className="text-gray-600">{stat.count2nd}</span></span>
+                      <span>3지망 <span className="text-gray-600">{stat.count3rd}</span></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
             {isManager && (
               <button onClick={generateLineup} className="w-full py-5 bg-gray-900 text-white rounded-[24px] font-black shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all">
                 <Zap className="text-yellow-400 fill-yellow-400 w-5 h-5"/> 알고리즘 라인업 가동
               </button>
             )}
+
             <div className="space-y-3">
               <h3 className="font-black text-lg px-1">신청자 명단 ({participants.length}명)</h3>
               {participants.map((p) => (
                 <div key={p.id} className="flex items-center gap-3 bg-white p-4 rounded-[24px] border shadow-sm">
                   <div className="w-11 h-11 bg-blue-50 rounded-full flex items-center justify-center font-bold text-sport-blue overflow-hidden border">
-                    {p.profiles?.avatar_url ? <img src={p.profiles.avatar_url} className="w-full h-full object-cover" /> : p.profiles?.full_name?.[0]}
+                    {p.profiles?.avatar_url ? <img src={p.profiles.avatar_url} className="w-full h-full object-cover" /> : <User className="w-5 h-5"/>}
                   </div>
                   <div className="flex-1 font-black">
-                    <p className="text-sm">{p.profiles?.full_name}</p>
-                    {/* ✅ 타입 에러 수정을 위해 sortSets 도우미 함수 사용 */}
-                    <p className="text-[10px] text-gray-400">
+                    {/* 명단 리스트에서는 이름 마스킹 */}
+                    <p className="text-sm">{maskName(p.profiles?.full_name)}</p>
+                    <p className="text-[10px] text-gray-400 font-bold">
                       {sortSets(p.available_sets?.split(',') || []).join(', ')}세트
                     </p>
                   </div>
@@ -322,7 +358,7 @@ export default function MatchDetailPage() {
               ))}
             </div>
 
-            { (match.is_lineup_visible || isManager) ? (
+            { (match.is_lineup_visible || isManager || isJoined) ? (
               <div className="space-y-8 pb-20">
                 <CourtView teamPlayers={participants.filter(p => p[`team_r${activeRound}`] === 'A팀')} teamType="A팀" round={activeRound} />
                 <div className="flex items-center justify-center py-2">
@@ -340,15 +376,15 @@ export default function MatchDetailPage() {
                     <div className="grid grid-cols-3 gap-3">
                       {participants.filter(p => p[`pos_r${activeRound}`] === '대기').map(p => (
                         <div key={p.id} className="bg-gray-50 p-3 rounded-2xl text-center border border-gray-100">
-                          <p className="text-[11px] font-black text-gray-800">{anonymizeName(p.profiles?.full_name)}</p>
-                          <p className="text-[8px] font-black text-gray-400 mt-1 uppercase">1ST: {p.pos_1st}</p>
+                          <p className="text-[12px] font-black text-gray-800">{p.profiles?.full_name}</p>
+                          <p className="text-[9px] font-black text-gray-400 mt-1 uppercase">1지망: {p.pos_1st}</p>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
               </div>
-            ) : <div className="py-24 text-center font-black text-gray-300">라인업이 아직 비공개 상태입니다. 🕵️‍♂️</div>}
+            ) : <div className="py-24 text-center font-black text-gray-300">라인업이 비공개 상태입니다. 🕵️‍♂️<br/><span className="text-xs font-bold text-gray-400 mt-2 block">참가 신청자만 조회가 가능합니다.</span></div>}
           </div>
         )}
       </main>
