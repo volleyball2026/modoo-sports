@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { BottomNav } from '@/components/bottom-nav';
 import { 
   ArrowLeft, Calendar, MapPin, Users, Trash2, Edit3, 
-  User, Zap, Eye, EyeOff, X, Download, BarChart3, Clock, Settings
+  User, Zap, Eye, EyeOff, X, Download, BarChart3, Clock, Settings, Loader2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -24,13 +24,12 @@ export default function MatchDetailPage() {
   const [match, setMatch] = useState<any | null>(null);
   const [participants, setParticipants] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('info');
   
-  // 신청 수정용 상태
   const [showPositionModal, setShowPositionModal] = useState(false);
-  const [editingParticipant, setEditingParticipant] = useState<any>(null); // 누구를 수정 중인지 저장
+  const [isSubmitting, setIsSubmitting] = useState(false); // 저장 중 로딩 상태
+  const [editingParticipant, setEditingParticipant] = useState<any>(null); 
   const [joinForm, setJoinForm] = useState({
     pos_1st: '레프트',
     pos_2nd: '선택 안함',
@@ -44,12 +43,10 @@ export default function MatchDetailPage() {
       setLoading(true);
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       setUser(currentUser);
-      if (currentUser) {
-        const { data: profileData } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
-        setUserProfile(profileData);
-      }
+      
       const { data: matchData } = await supabase.from('matches').select('*').eq('id', matchId).single();
       setMatch(matchData);
+      
       const { data: partData } = await supabase.from('match_participants').select('*, profiles(*)').eq('match_id', matchId);
       setParticipants(partData || []);
     } catch (error) { console.error(error); } finally { setLoading(false); }
@@ -60,10 +57,9 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // --- 🛠️ 마스터 권한 수정 함수 ---
+  // --- 🛠️ 수정 모달 열기 ---
   const openEditModal = (participant?: any) => {
     if (participant) {
-      // 관리자가 특정 인원을 수정할 때
       setEditingParticipant(participant);
       setJoinForm({
         pos_1st: participant.pos_1st || '레프트',
@@ -73,9 +69,8 @@ export default function MatchDetailPage() {
         available_sets: participant.available_sets?.split(',') || []
       });
     } else {
-      // 본인이 본인 거 신청/수정할 때
       setEditingParticipant(null);
-      const myData = participants.find(p => p.user_id === user.id);
+      const myData = participants.find(p => p.user_id === user?.id);
       if (myData) {
         setJoinForm({
           pos_1st: myData.pos_1st, pos_2nd: myData.pos_2nd, pos_3rd: myData.pos_3rd,
@@ -92,38 +87,50 @@ export default function MatchDetailPage() {
     setShowPositionModal(true);
   };
 
+  // --- 💾 실제 저장 로직 (수정 완료!) ---
   const submitJoin = async () => {
     if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
     
-    // 대상 결정: 관리자 수정 중이면 해당 유저, 아니면 본인
-    const targetUserId = editingParticipant ? editingParticipant.user_id : user.id;
-    const isTargetJoined = participants.some(p => p.user_id === targetUserId);
-
-    const payload = {
-      match_id: matchId, 
-      user_id: targetUserId,
-      pos_1st: joinForm.pos_1st, 
-      pos_2nd: joinForm.pos_2nd, 
-      pos_3rd: joinForm.pos_3rd,
-      pos_exclude: joinForm.pos_exclude,
-      available_sets: joinForm.available_sets.join(',')
-    };
-
     try {
-      if (isTargetJoined) {
-        await supabase.from('match_participants').update(payload).eq('match_id', matchId).eq('user_id', targetUserId);
+      setIsSubmitting(true);
+      const payload = {
+        pos_1st: joinForm.pos_1st, 
+        pos_2nd: joinForm.pos_2nd, 
+        pos_3rd: joinForm.pos_3rd,
+        pos_exclude: joinForm.pos_exclude,
+        available_sets: joinForm.available_sets.join(',')
+      };
+
+      // 1. 수정 대상의 고유 ID(PK) 찾기
+      const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
+
+      if (targetRecord) {
+        // 이미 신청된 경우 -> UPDATE (ID로 정확히 타겟팅)
+        const { error } = await supabase.from('match_participants')
+          .update(payload)
+          .eq('id', targetRecord.id); // PK인 id를 사용하여 정확히 수정
+        if (error) throw error;
       } else {
-        await supabase.from('match_participants').insert([payload]);
+        // 새로 신청하는 경우 -> INSERT
+        const { error } = await supabase.from('match_participants').insert([{
+          ...payload,
+          match_id: matchId,
+          user_id: user.id
+        }]);
+        if (error) throw error;
       }
-      alert(editingParticipant ? `${editingParticipant.profiles?.full_name}님의 내역을 수정했습니다.` : '신청 완료!');
+
+      alert(editingParticipant ? '관리자 권한으로 수정되었습니다!' : '신청이 완료되었습니다!');
       setShowPositionModal(false);
-      fetchMatchDetails();
-    } catch (e) {
-      alert('오류가 발생했습니다.');
+      await fetchMatchDetails(); // 데이터 다시 불러오기
+    } catch (e: any) {
+      alert(`❌ 저장 실패: ${e.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // --- 🏐 공평 배정 알고리즘 (기존 로직 유지) ---
+  // --- 🏐 공평 배정 알고리즘 (기존 로직 보존) ---
   const generateLineup = async () => {
     if (!confirm('공평 배정 로직으로 라인업을 생성하시겠습니까?')) return;
     const history1st: Record<string, number> = {};
@@ -138,8 +145,7 @@ export default function MatchDetailPage() {
         const sets = p.available_sets?.split(',') || [];
         return sets.includes(setA) || sets.includes(setB);
       }).map(p => {
-        const baseScore = 100; 
-        const priorityScore = baseScore - ((history1st[p.id] || 0) * 10) + (mileage[p.id] || 0) + Math.random();
+        const priorityScore = 100 - ((history1st[p.id] || 0) * 10) + (mileage[p.id] || 0) + Math.random();
         return { ...p, priorityScore, skillScore: getSkillScore(p.profiles?.skill_level) };
       });
 
@@ -211,9 +217,9 @@ export default function MatchDetailPage() {
         {activeTab === 'info' ? (
           <>
             <div className="bg-white p-6 rounded-3xl shadow-sm border font-bold">
-               <h2 className="text-2xl font-black mb-4">{match.title}</h2>
-               <p className="flex items-center gap-2 text-gray-500"><Calendar className="w-4 h-4"/> {match.match_date}</p>
-               <p className="flex items-center gap-2 text-gray-500"><MapPin className="w-4 h-4"/> {match.location}</p>
+               <h2 className="text-2xl font-black mb-4 leading-tight">{match.title}</h2>
+               <p className="flex items-center gap-2 text-gray-500 text-sm mb-1"><Calendar className="w-4 h-4"/> {match.match_date}</p>
+               <p className="flex items-center gap-2 text-gray-500 text-sm"><MapPin className="w-4 h-4"/> {match.location}</p>
             </div>
             {isManager && (
               <button onClick={generateLineup} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl flex items-center justify-center gap-2">
@@ -223,19 +229,18 @@ export default function MatchDetailPage() {
             <div className="space-y-2">
               <h3 className="font-black text-lg">신청자 명단 ({participants.length}명)</h3>
               {participants.map((p, idx) => (
-                <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border">
+                <div key={idx} className="flex items-center gap-3 bg-white p-3 rounded-2xl border shadow-sm">
                   <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center font-bold text-sport-blue text-xs overflow-hidden">
                     {p.profiles?.avatar_url ? <img src={p.profiles.avatar_url} className="w-full h-full object-cover" /> : p.profiles?.full_name?.[0]}
                   </div>
                   <div className="flex-1 font-bold">
                     <p className="text-sm">{p.profiles?.full_name}</p>
-                    <p className="text-[10px] text-gray-400">{p.available_sets}세트 참여</p>
+                    <p className="text-[10px] text-gray-400">{p.available_sets?.split(',').join(', ')}세트 참여</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-xs font-bold text-sport-blue bg-blue-50 px-2 py-1 rounded-lg">{p.pos_1st}</div>
-                    {/* 마스터 수정 버튼 추가 */}
                     {isManager && (
-                      <button onClick={() => openEditModal(p)} className="p-1.5 bg-gray-100 rounded-lg text-gray-500 hover:bg-gray-200">
+                      <button onClick={() => openEditModal(p)} className="p-1.5 bg-gray-100 rounded-lg text-gray-500 hover:bg-gray-200 transition-colors">
                         <Settings className="w-4 h-4" />
                       </button>
                     )}
@@ -273,10 +278,10 @@ export default function MatchDetailPage() {
       </main>
 
       {showPositionModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-[32px] p-6 max-h-[85vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-lg rounded-[32px] p-6 max-h-[85vh] overflow-y-auto shadow-2xl">
             <h3 className="text-2xl font-black mb-6">
-              {editingParticipant ? `${editingParticipant.profiles?.full_name}님 수정` : '참가 신청'}
+              {editingParticipant ? `${editingParticipant.profiles?.full_name}님 수정 (관리자)` : '참가 신청'}
             </h3>
             <div className="space-y-6">
               <div>
@@ -308,16 +313,17 @@ export default function MatchDetailPage() {
                   </select></div>
                 </div>
               </div>
-              <button onClick={submitJoin} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl">
-                {editingParticipant ? '수정 완료 (관리자)' : '신청 완료'}
+              <button onClick={submitJoin} disabled={isSubmitting} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl flex items-center justify-center gap-2">
+                {isSubmitting ? <Loader2 className="w-6 h-6 animate-spin" /> : (editingParticipant ? '수정 사항 저장' : '신청 완료')}
               </button>
+              <button onClick={() => setShowPositionModal(false)} className="w-full py-4 text-gray-400 font-bold">취소</button>
             </div>
           </div>
         </div>
       )}
 
       <div className="fixed bottom-20 left-0 right-0 p-4 max-w-lg mx-auto bg-gradient-to-t from-gray-50 pt-10">
-        <button onClick={() => openEditModal()} className="w-full py-5 rounded-2xl font-black bg-sport-blue text-white shadow-xl">
+        <button onClick={() => openEditModal()} className="w-full py-5 rounded-2xl font-black bg-sport-blue text-white shadow-xl active:scale-95 transition-all">
           {isJoined ? '신청 내용 수정' : '지금 참가 신청하기'}
         </button>
       </div>
