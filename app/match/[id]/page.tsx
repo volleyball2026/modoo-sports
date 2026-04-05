@@ -55,6 +55,19 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
+  // 세트 번호를 보기 좋게 정렬하는 헬퍼 함수
+  const sortSets = (setsArray: string[]) => {
+    return [...setsArray]
+      .filter(Boolean) // 빈 값 제거
+      .sort((a, b) => {
+        const numA = parseInt(a);
+        const numB = parseInt(b);
+        if (isNaN(numA)) return 1; // 숫자가 아닌 경우(예: '끝장') 뒤로 보냄
+        if (isNaN(numB)) return -1;
+        return numA - numB;
+      });
+  };
+
   const openEditModal = (participant?: any) => {
     if (participant) {
       setEditingParticipant(participant);
@@ -63,7 +76,7 @@ export default function MatchDetailPage() {
         pos_2nd: participant.pos_2nd || '선택 안함',
         pos_3rd: participant.pos_3rd || '선택 안함',
         pos_exclude: participant.pos_exclude || '선택 안함',
-        available_sets: participant.available_sets?.split(',') || []
+        available_sets: sortSets(participant.available_sets?.split(',') || [])
       });
     } else {
       setEditingParticipant(null);
@@ -72,7 +85,7 @@ export default function MatchDetailPage() {
         setJoinForm({
           pos_1st: myData.pos_1st, pos_2nd: myData.pos_2nd, pos_3rd: myData.pos_3rd,
           pos_exclude: myData.pos_exclude || '선택 안함',
-          available_sets: myData.available_sets?.split(',') || []
+          available_sets: sortSets(myData.available_sets?.split(',') || [])
         });
       } else {
         setJoinForm({
@@ -84,35 +97,32 @@ export default function MatchDetailPage() {
     setShowPositionModal(true);
   };
 
-  // --- 💾 [수정됨] 에러 방지용 저장 로직 ---
   const submitJoin = async () => {
     if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
     
     try {
       setIsSubmitting(true);
+      // 저장하기 전에 세트 번호를 오름차순으로 정렬합니다.
+      const sortedSetsStr = sortSets(joinForm.available_sets).join(',');
+
       const payload = {
         pos_1st: joinForm.pos_1st, 
         pos_2nd: joinForm.pos_2nd, 
         pos_3rd: joinForm.pos_3rd,
         pos_exclude: joinForm.pos_exclude,
-        available_sets: joinForm.available_sets.join(',')
+        available_sets: sortedSetsStr
       };
 
       const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
 
       if (targetRecord) {
-        // [핵심 해결] .single()을 제거하고 배열로 처리하여 에러를 막습니다.
         const { data: updatedResults, error } = await supabase.from('match_participants')
           .update(payload)
           .eq('id', targetRecord.id)
           .select('*, profiles(*)');
         
         if (error) throw error;
-
-        // 실제 수정된 데이터가 없을 경우 (주로 RLS 권한 문제)
-        if (!updatedResults || updatedResults.length === 0) {
-          throw new Error("수정 권한이 없거나 대상을 찾을 수 없습니다. Supabase 정책(RLS)을 확인해 주세요.");
-        }
+        if (!updatedResults || updatedResults.length === 0) throw new Error("수정 권한이 없습니다.");
 
         const updatedData = updatedResults[0];
         setParticipants(prev => prev.map(p => p.id === updatedData.id ? updatedData : p));
@@ -131,13 +141,11 @@ export default function MatchDetailPage() {
       setShowPositionModal(false);
     } catch (e: any) {
       alert(`❌ 오류 발생: ${e.message}`);
-      console.error('Save Error:', e);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // --- 🏐 알고리즘 로직 (유지) ---
   const generateLineup = async () => {
     if (!confirm('공평 배정 로직으로 라인업을 생성하시겠습니까?')) return;
     const history1st: Record<string, number> = {};
@@ -238,7 +246,10 @@ export default function MatchDetailPage() {
                   </div>
                   <div className="flex-1">
                     <p className="font-black text-gray-900 text-sm">{p.profiles?.full_name}</p>
-                    <p className="text-[10px] text-gray-400 font-bold mt-0.5">{p.available_sets?.split(',').join(', ')}세트 참여</p>
+                    {/* 화면 표시 시 세트 번호를 정렬하여 보여줍니다. */}
+                    <p className="text-[10px] text-gray-400 font-bold mt-0.5">
+                      {sortSets(p.available_sets?.split(',') || []).join(', ')}세트 참여
+                    </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-[11px] font-black text-sport-blue bg-blue-50 px-2.5 py-1.5 rounded-lg border border-blue-100">{p.pos_1st}</div>
@@ -302,7 +313,7 @@ export default function MatchDetailPage() {
                       <button key={s} onClick={() => {
                         const curr = joinForm.available_sets;
                         setJoinForm({...joinForm, available_sets: active ? curr.filter(v => v !== s) : [...curr, s]});
-                      }} className={`py-3 rounded-2xl font-black text-sm border-2 transition-all ${active ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-md shadow-blue-100' : 'border-gray-50 bg-gray-50 text-gray-400'}`}>{s}세트</button>
+                      }} className={`py-3 rounded-2xl font-black text-sm border-2 transition-all ${active ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-md shadow-blue-100' : 'border-gray-100 bg-white text-gray-400'}`}>{s}세트</button>
                     );
                   })}
                 </div>
