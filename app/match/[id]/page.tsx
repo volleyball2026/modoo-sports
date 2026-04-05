@@ -81,9 +81,13 @@ export default function MatchDetailPage() {
 
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
-  // ✅ 포지션 지정 모집 여부 (방식 명칭 통합 대응)
-  const isPositionRecruit = match?.recruitment_type === 'position' || match?.recruitment_type === '선착순';
 
+  // ✅ 모집 방식 구분 플래그
+  const isPositionRecruit = match?.recruitment_type === 'position' || match?.recruitment_type === '선착순';
+  const isAlgorithmRecruit = match?.recruitment_type === 'algorithm';
+  const isGeneralRecruit = match?.recruitment_type === 'general';
+
+  // --- 📊 모집 방식별 현황판 데이터 계산 ---
   const positionTOStats = useMemo(() => {
     if (!isPositionRecruit || !match?.position_settings) return [];
     return Object.entries(match.position_settings)
@@ -95,16 +99,20 @@ export default function MatchDetailPage() {
       });
   }, [match, participants, isPositionRecruit]);
 
+  // ✅ 복구된 알고리즘용 1/2/3순위 현황판 데이터
   const algoStats = useMemo(() => {
-    if (isPositionRecruit) return [];
+    if (!isAlgorithmRecruit) return [];
     return REAL_POSITIONS.map(pos => {
       const count1st = participants.filter(p => p.pos_1st === pos).length;
+      const count2nd = participants.filter(p => p.pos_2nd === pos).length;
+      const count3rd = participants.filter(p => p.pos_3rd === pos).length;
       let status = count1st >= 3 ? '혼잡' : (count1st === 0 ? '빈집' : '여유');
       let statusClass = count1st >= 3 ? 'text-red-500 bg-red-50' : (count1st === 0 ? 'text-blue-500 bg-blue-50' : 'text-green-500 bg-green-50');
-      return { pos, count1st, status, statusClass };
+      return { pos, count1st, count2nd, count3rd, status, statusClass };
     });
-  }, [participants, isPositionRecruit]);
+  }, [participants, isAlgorithmRecruit]);
 
+  // --- 🏐 코트 뷰 및 알고리즘 로직 (기존 유지) ---
   const getPlayerStatsForRound = (player: any, round: number) => {
     const skillMap: any = { '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 };
     const skillScore = skillMap[player.profiles?.skill_level] || 50;
@@ -198,7 +206,7 @@ export default function MatchDetailPage() {
   };
 
   const submitJoin = async () => {
-    if (!joinForm.pos_1st) return alert('포지션을 선택해주세요.');
+    if (isAlgorithmRecruit && !joinForm.pos_1st) return alert('포지션을 선택해주세요.');
     if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
     try {
       setIsSubmitting(true);
@@ -206,8 +214,9 @@ export default function MatchDetailPage() {
       const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
       await supabase.from('profiles').update({ skill_level: joinForm.skill_level }).eq('id', targetUserId);
       const payload = {
-        pos_1st: joinForm.pos_1st, pos_2nd: isPositionRecruit ? '선택 안함' : joinForm.pos_2nd,
-        pos_3rd: isPositionRecruit ? '선택 안함' : joinForm.pos_3rd,
+        pos_1st: joinForm.pos_1st, 
+        pos_2nd: (isPositionRecruit || isGeneralRecruit) ? '선택 안함' : joinForm.pos_2nd,
+        pos_3rd: (isPositionRecruit || isGeneralRecruit) ? '선택 안함' : joinForm.pos_3rd,
         available_sets: sortSets(joinForm.available_sets).join(',')
       };
       if (targetRecord) {
@@ -275,7 +284,7 @@ export default function MatchDetailPage() {
       const finalRound = [...assign(teamA).map(r => ({ ...r, team: 'A팀' })), ...assign(teamB).map(r => ({ ...r, team: 'B팀' }))];
       for (const fr of finalRound) { await supabase.from('match_participants').update({ [`team_r${r}`]: fr.team, [`pos_r${r}`]: fr.pos }).eq('id', fr.id); }
     }
-    alert('라인업 생성 완료!'); fetchMatchDetails();
+    alert('라인업 생성이 완료되었습니다!'); fetchMatchDetails();
   };
 
   if (loading) return <div className="p-10 text-center font-bold">로딩 중...</div>;
@@ -303,8 +312,8 @@ export default function MatchDetailPage() {
       <div className="bg-white border-b sticky top-14 z-20">
         <div className="flex max-w-lg mx-auto">
           <button onClick={() => setActiveTab('info')} className={`flex-1 py-4 font-black text-sm ${activeTab === 'info' ? 'border-b-4 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>정보/명단</button>
-          {/* ✅ ✅ ✅ 포지션 모집일 때는 '코트 라인업' 탭을 숨김 */}
-          {!isPositionRecruit && (
+          {/* ✅ 일반 모집과 포지션 모집일 때는 '코트 라인업' 탭을 숨김 */}
+          {isAlgorithmRecruit && (
             <button onClick={() => setActiveTab('lineup')} className={`flex-1 py-4 font-black text-sm ${activeTab === 'lineup' ? 'border-b-4 border-sport-blue text-sport-blue' : 'text-gray-400'}`}>코트 라인업</button>
           )}
         </div>
@@ -320,26 +329,51 @@ export default function MatchDetailPage() {
                  <p className="flex items-center gap-2"><Users className="w-4 h-4 text-sport-blue"/> {participants.length}/{match.max_participants}명 신청 중</p>
                </div>
                {isPositionRecruit && <p className="text-[11px] font-bold text-sport-blue bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-100">📢 포지션별 선착순 모집 중입니다.</p>}
+               {isGeneralRecruit && <p className="text-[11px] font-bold text-sport-blue bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-100">📢 일반 선착순 모집 매치입니다.</p>}
             </div>
 
-            <section className="space-y-4">
-              <h3 className="font-black text-lg px-2 flex items-center gap-2">
-                {isPositionRecruit ? <ClipboardList className="w-5 h-5 text-sport-blue"/> : <BarChart3 className="w-5 h-5 text-sport-blue"/>}
-                {isPositionRecruit ? '포지션별 남은 자리 (T.O)' : '실시간 포지션 경쟁률'}
-              </h3>
-              <div className="grid grid-cols-2 gap-2.5">
-                {(isPositionRecruit ? positionTOStats : algoStats).map((stat: any, idx) => (
-                  <div key={idx} className={`p-4 rounded-[20px] border shadow-sm flex items-center justify-between bg-white border-gray-100 ${stat.isFull ? 'opacity-50' : ''}`}>
-                    <span className="font-black text-sm text-gray-900">{stat.pos}</span>
-                    <span className={`text-[10px] font-black px-2 py-1 rounded-md ${isPositionRecruit ? (stat.isFull ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-sport-blue') : stat.statusClass}`}>
-                      {isPositionRecruit ? (stat.isFull ? '마감' : `${stat.remaining}자리 남음`) : stat.status}
-                    </span>
+            {/* ✅ 포지션 현황판 영역 (일반 모집일 때는 아예 숨김) */}
+            {!isGeneralRecruit && (
+              <section className="space-y-4">
+                <h3 className="font-black text-lg px-2 flex items-center gap-2">
+                  {isPositionRecruit ? <ClipboardList className="w-5 h-5 text-sport-blue"/> : <BarChart3 className="w-5 h-5 text-sport-blue"/>}
+                  {isPositionRecruit ? '포지션별 남은 자리 (T.O)' : '실시간 포지션 경쟁률'}
+                </h3>
+                
+                {isAlgorithmRecruit ? (
+                  /* ✅ 복구된 알고리즘용 1/2/3지망 상세 현황판 */
+                  <div className="grid grid-cols-3 gap-2">
+                    {algoStats.map((stat: any, idx) => (
+                      <div key={idx} className="bg-white p-3 rounded-[24px] border shadow-sm flex flex-col items-center justify-center">
+                        <div className="flex items-center gap-1 mb-2">
+                          <span className="font-bold text-[11px] text-gray-700">{stat.pos}</span>
+                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${stat.statusClass}`}>{stat.status}</span>
+                        </div>
+                        <p className="text-2xl font-black text-gray-900 mb-1">{stat.count1st}<span className="text-xs text-gray-400 ml-0.5 font-bold">명</span></p>
+                        <div className="w-full flex justify-between text-[9px] text-gray-400 font-bold px-1.5">
+                          <span>2지 <span className="text-gray-600">{stat.count2nd}</span></span>
+                          <span>3지 <span className="text-gray-600">{stat.count3rd}</span></span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </section>
+                ) : (
+                  /* 포지션 지정형 현황판 */
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {positionTOStats.map((stat: any, idx) => (
+                      <div key={idx} className={`p-4 rounded-[20px] border shadow-sm flex items-center justify-between bg-white border-gray-100 ${stat.isFull ? 'opacity-50' : ''}`}>
+                        <span className="font-black text-sm text-gray-900">{stat.pos}</span>
+                        <span className={`text-[10px] font-black px-2 py-1 rounded-md ${stat.isFull ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-sport-blue'}`}>
+                          {stat.isFull ? '마감' : `${stat.remaining}자리 남음`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
 
-            {isManager && !isPositionRecruit && (
+            {isManager && isAlgorithmRecruit && (
               <button onClick={generateLineup} className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all"><Zap className="text-yellow-400 fill-yellow-400 w-5 h-5"/> 알고리즘 가동하기</button>
             )}
 
@@ -353,10 +387,13 @@ export default function MatchDetailPage() {
                   <div className="flex-1 font-black">
                     <p className="text-base text-gray-900">{maskName(p.profiles?.full_name)}</p>
                     <p className="text-[10px] text-gray-400 font-bold truncate">{sortSets(p.available_sets?.split(',') || []).join(', ')}세트</p>
-                    <div className="flex gap-1 mt-1">
-                      <span className="text-[8px] bg-blue-50 text-sport-blue px-1.5 py-0.5 rounded border border-blue-100">{p.pos_1st}</span>
-                      {!isPositionRecruit && p.pos_2nd !== '선택 안함' && <span className="text-[8px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded border border-green-100">{p.pos_2nd}</span>}
-                    </div>
+                    {isAlgorithmRecruit && (
+                      <div className="flex gap-1 mt-1">
+                        <span className="text-[8px] bg-blue-50 text-sport-blue px-1.5 py-0.5 rounded border border-blue-100">{p.pos_1st}</span>
+                        {p.pos_2nd !== '선택 안함' && <span className="text-[8px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded border border-green-100">{p.pos_2nd}</span>}
+                      </div>
+                    )}
+                    {isPositionRecruit && <div className="mt-1"><span className="text-[8px] bg-blue-50 text-sport-blue px-1.5 py-0.5 rounded border border-blue-100">{p.pos_1st} (확정)</span></div>}
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-[9px] font-black text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">{p.profiles?.skill_level}</div>
@@ -367,8 +404,7 @@ export default function MatchDetailPage() {
             </div>
           </>
         ) : (
-          /* ✅ ✅ ✅ 포지션 모집이 아닐 때만 렌더링되는 라인업 영역 */
-          !isPositionRecruit && (
+          isAlgorithmRecruit && (
             <div className="space-y-6">
               <div className="bg-white border-2 border-sport-blue/20 rounded-[32px] overflow-hidden shadow-sm">
                 <button onClick={() => setShowAlgoGuide(!showAlgoGuide)} className="w-full p-5 flex items-center justify-between bg-blue-50/30">
@@ -383,28 +419,22 @@ export default function MatchDetailPage() {
                   </div>
                 )}
               </div>
+
               <div className="flex gap-2 overflow-x-auto pb-4 px-1">
                 {[1, 2, 3, 4].map(r => (
-                  <button key={r} onClick={() => setActiveRound(r)} className={`px-7 py-3.5 rounded-full font-black text-sm whitespace-nowrap transition-all border-2 ${activeRound === r ? 'bg-sport-blue border-sport-blue text-white shadow-xl scale-105' : 'bg-white border-gray-100 text-gray-400'}`}>{r*2-1}·{r*2} SET</button>
+                  <button key={r} onClick={() => setActiveRound(r)} className={`px-7 py-3.5 rounded-full font-black text-sm whitespace-nowrap transition-all border-2 ${activeRound === r ? 'bg-sport-blue border-sport-blue text-white shadow-xl scale-105' : 'bg-white border-gray-100 text-gray-400'}`}>
+                    {r*2-1}·{r*2} SET
+                  </button>
                 ))}
               </div>
+
               { (match.is_lineup_visible || isManager || isJoined) ? (
                 <div className="space-y-10 pb-20 px-1">
                   <CourtView teamPlayers={participants.filter(p => p[`team_r${activeRound}`] === 'A팀')} teamType="A팀" round={activeRound} />
                   <div className="flex items-center justify-center py-2"><div className="h-[3px] bg-gray-200 flex-1 rounded-full"></div><span className="px-8 text-[11px] font-black text-gray-300 uppercase tracking-widest">Net Area</span><div className="h-[3px] bg-gray-200 flex-1 rounded-full"></div></div>
                   <CourtView teamPlayers={participants.filter(p => p[`team_r${activeRound}`] === 'B팀')} teamType="B팀" round={activeRound} />
-                  { participants.some(p => p[`pos_r${activeRound}`] === '대기') && (
-                    <div className="bg-white p-8 rounded-[48px] border-2 border-dashed border-gray-200 shadow-sm">
-                      <p className="text-[12px] font-black text-gray-400 mb-5 uppercase"><Clock className="w-5 h-5 inline mr-2"/> 대기 선수 명단</p>
-                      <div className="grid grid-cols-2 gap-4">
-                        {participants.filter(p => p[`pos_r${activeRound}`] === '대기').map(p => (
-                          <div key={p.id} className="bg-gray-50 p-4 rounded-3xl text-center border border-gray-100"><p className="text-[14px] font-black text-gray-800">{p.profiles?.full_name}</p></div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
-              ) : <div className="py-24 text-center font-black text-gray-300">라인업 비공개 상태입니다. 🕵️‍♂️</div>}
+              ) : <div className="py-24 text-center font-black text-gray-300">라인업이 비공개 상태입니다. 🕵️‍♂️</div>}
             </div>
           )
         )}
@@ -423,6 +453,7 @@ export default function MatchDetailPage() {
                   <button key={s} onClick={() => { const curr = joinForm.available_sets; setJoinForm({...joinForm, available_sets: curr.includes(s) ? curr.filter(v => v !== s) : [...curr, s]}); }} className={`py-4 rounded-[20px] font-black text-sm border-2 ${joinForm.available_sets.includes(s) ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100 text-gray-400'}`}>{s}</button>
                 ))}</div>
               </div>
+              
               {isPositionRecruit ? (
                 <div><label className="text-sm font-black mb-4 block text-gray-600">확정 포지션 선택 (선착순)</label>
                   <div className="grid grid-cols-2 gap-2.5">{positionTOStats.map((stat: any, idx) => (
@@ -432,7 +463,7 @@ export default function MatchDetailPage() {
                     </button>
                   ))}</div>
                 </div>
-              ) : (
+              ) : isAlgorithmRecruit ? (
                 <div className="space-y-4 pt-2">
                   <label className="text-sm font-black block text-gray-600">희망 포지션 (1/2/3순위)</label>
                   <select className="w-full p-5 rounded-[24px] border-2 font-black" value={joinForm.pos_1st} onChange={e => setJoinForm({...joinForm, pos_1st: e.target.value})}>{VOLLEYBALL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}</select>
@@ -441,7 +472,8 @@ export default function MatchDetailPage() {
                     <select className="w-full p-5 rounded-[24px] border-2 font-black" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>{BONUS_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}</select>
                   </div>
                 </div>
-              )}
+              ) : null /* 일반 모집은 포지션 선택 생략 */}
+
               <div className="space-y-3 pt-4">
                 <button onClick={submitJoin} disabled={isSubmitting} className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-xl flex items-center justify-center gap-2">
                   {isSubmitting ? <Loader2 className="w-6 h-6 animate-spin" /> : (editingParticipant || isJoined ? '수정 내용 저장하기' : '참가 신청 완료하기')}
