@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { BottomNav } from '@/components/bottom-nav';
 import { 
   ArrowLeft, Calendar, MapPin, Users, Trash2, Edit3, 
-  User, Zap, Eye, EyeOff, X, Download, BarChart3, Clock
+  User, Zap, Eye, EyeOff, X, Download, BarChart3, Clock, Settings
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -28,7 +28,9 @@ export default function MatchDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('info');
   
+  // 신청 수정용 상태
   const [showPositionModal, setShowPositionModal] = useState(false);
+  const [editingParticipant, setEditingParticipant] = useState<any>(null); // 누구를 수정 중인지 저장
   const [joinForm, setJoinForm] = useState({
     pos_1st: '레프트',
     pos_2nd: '선택 안함',
@@ -58,119 +60,123 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // --- 🏐 공평 배정 알고리즘 (평등 시작점 100점 + 랜덤 변수 0~1) ---
-  const generateLineup = async () => {
-    if (!confirm('모든 인원이 공평하게 100점에서 시작하는 로직으로 라인업을 생성하시겠습니까?')) return;
+  // --- 🛠️ 마스터 권한 수정 함수 ---
+  const openEditModal = (participant?: any) => {
+    if (participant) {
+      // 관리자가 특정 인원을 수정할 때
+      setEditingParticipant(participant);
+      setJoinForm({
+        pos_1st: participant.pos_1st || '레프트',
+        pos_2nd: participant.pos_2nd || '선택 안함',
+        pos_3rd: participant.pos_3rd || '선택 안함',
+        pos_exclude: participant.pos_exclude || '선택 안함',
+        available_sets: participant.available_sets?.split(',') || []
+      });
+    } else {
+      // 본인이 본인 거 신청/수정할 때
+      setEditingParticipant(null);
+      const myData = participants.find(p => p.user_id === user.id);
+      if (myData) {
+        setJoinForm({
+          pos_1st: myData.pos_1st, pos_2nd: myData.pos_2nd, pos_3rd: myData.pos_3rd,
+          pos_exclude: myData.pos_exclude || '선택 안함',
+          available_sets: myData.available_sets?.split(',') || []
+        });
+      } else {
+        setJoinForm({
+          pos_1st: '레프트', pos_2nd: '선택 안함', pos_3rd: '선택 안함', pos_exclude: '선택 안함',
+          available_sets: ["1","2","3","4","5","6","7","8"]
+        });
+      }
+    }
+    setShowPositionModal(true);
+  };
+
+  const submitJoin = async () => {
+    if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
     
+    // 대상 결정: 관리자 수정 중이면 해당 유저, 아니면 본인
+    const targetUserId = editingParticipant ? editingParticipant.user_id : user.id;
+    const isTargetJoined = participants.some(p => p.user_id === targetUserId);
+
+    const payload = {
+      match_id: matchId, 
+      user_id: targetUserId,
+      pos_1st: joinForm.pos_1st, 
+      pos_2nd: joinForm.pos_2nd, 
+      pos_3rd: joinForm.pos_3rd,
+      pos_exclude: joinForm.pos_exclude,
+      available_sets: joinForm.available_sets.join(',')
+    };
+
+    try {
+      if (isTargetJoined) {
+        await supabase.from('match_participants').update(payload).eq('match_id', matchId).eq('user_id', targetUserId);
+      } else {
+        await supabase.from('match_participants').insert([payload]);
+      }
+      alert(editingParticipant ? `${editingParticipant.profiles?.full_name}님의 내역을 수정했습니다.` : '신청 완료!');
+      setShowPositionModal(false);
+      fetchMatchDetails();
+    } catch (e) {
+      alert('오류가 발생했습니다.');
+    }
+  };
+
+  // --- 🏐 공평 배정 알고리즘 (기존 로직 유지) ---
+  const generateLineup = async () => {
+    if (!confirm('공평 배정 로직으로 라인업을 생성하시겠습니까?')) return;
     const history1st: Record<string, number> = {};
     const mileage: Record<string, number> = {};
-    participants.forEach(p => { 
-      history1st[p.id] = 0; 
-      mileage[p.id] = 0; 
-    });
-
+    participants.forEach(p => { history1st[p.id] = 0; mileage[p.id] = 0; });
     const getSkillScore = (lvl: string) => ({ '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 }[lvl] || 50);
 
     for (let r = 1; r <= 4; r++) {
       const setA = String(r * 2 - 1);
       const setB = String(r * 2);
-
       const pool = participants.filter(p => {
         const sets = p.available_sets?.split(',') || [];
         return sets.includes(setA) || sets.includes(setB);
       }).map(p => {
         const baseScore = 100; 
-        const penalty = (history1st[p.id] || 0) * 10;
-        const bonus = (mileage[p.id] || 0);
-        // 요청하신 대로 변수의 범위는 0~1 사이로 설정했습니다.
-        const randomSeed = Math.random(); 
-
-        return { 
-          ...p, 
-          priorityScore: baseScore - penalty + bonus + randomSeed,
-          skillScore: getSkillScore(p.profiles?.skill_level)
-        };
+        const priorityScore = baseScore - ((history1st[p.id] || 0) * 10) + (mileage[p.id] || 0) + Math.random();
+        return { ...p, priorityScore, skillScore: getSkillScore(p.profiles?.skill_level) };
       });
 
       if (pool.length < 6) continue;
-
       const sortedBySkill = [...pool].sort((a, b) => b.skillScore - a.skillScore);
-      const teamA: any[] = [];
-      const teamB: any[] = [];
-      sortedBySkill.forEach((p, idx) => {
-        if (idx % 4 === 0 || idx % 4 === 3) teamA.push(p);
-        else teamB.push(p);
-      });
+      const teamA: any[] = []; const teamB: any[] = [];
+      sortedBySkill.forEach((p, idx) => { if (idx % 4 === 0 || idx % 4 === 3) teamA.push(p); else teamB.push(p); });
 
       const assign = (team: any[]) => {
         const sortedTeam = [...team].sort((a, b) => b.priorityScore - a.priorityScore);
         let remainingPos = [...REAL_POSITIONS];
         const results: any[] = [];
-
         sortedTeam.forEach(p => {
-          let finalPos = "대기";
-          let matchType = "wait";
-          const wishes = [
-            { pos: p.pos_1st, type: "1st" },
-            { pos: p.pos_2nd, type: "2nd" },
-            { pos: p.pos_3rd, type: "3rd" }
-          ].filter(w => w.pos && w.pos !== "선택 안함" && w.pos !== "상관없음");
-
-          for (const wish of wishes) {
-            if (remainingPos.includes(wish.pos)) {
-              finalPos = wish.pos;
-              matchType = wish.type;
-              break;
-            }
-          }
-
+          let finalPos = "대기"; let matchType = "wait";
+          const wishes = [{ pos: p.pos_1st, type: "1st" }, { pos: p.pos_2nd, type: "2nd" }, { pos: p.pos_3rd, type: "3rd" }].filter(w => w.pos && w.pos !== "선택 안함" && w.pos !== "상관없음");
+          for (const wish of wishes) { if (remainingPos.includes(wish.pos)) { finalPos = wish.pos; matchType = wish.type; break; } }
           if (finalPos === "대기" && remainingPos.length > 0) {
             const safePos = remainingPos.filter(pos => pos !== p.pos_exclude);
             finalPos = safePos.length > 0 ? safePos[Math.floor(Math.random() * safePos.length)] : remainingPos[0];
             matchType = "random";
           }
-
-          if (finalPos !== "대기") {
-            remainingPos = remainingPos.filter(v => v !== finalPos);
-          }
-
+          if (finalPos !== "대기") remainingPos = remainingPos.filter(v => v !== finalPos);
           if (matchType === "1st") history1st[p.id]++;
           else if (matchType === "2nd") mileage[p.id] += 3;
           else if (matchType === "3rd") mileage[p.id] += 5;
           else if (matchType === "wait" || matchType === "random") mileage[p.id] += 10;
-
           results.push({ id: p.id, pos: finalPos });
         });
         return results;
       };
 
-      const finalRoundData = [
-        ...assign(teamA).map(res => ({ ...res, team: 'A팀' })),
-        ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))
-      ];
-
+      const finalRoundData = [...assign(teamA).map(res => ({ ...res, team: 'A팀' })), ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))];
       for (const res of finalRoundData) {
-        await supabase.from('match_participants').update({
-          [`team_r${r}`]: res.team,
-          [`pos_r${r}`]: res.pos
-        }).eq('id', res.id);
+        await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id);
       }
     }
     alert('라인업 생성이 완료되었습니다! 🤖');
-    fetchMatchDetails();
-  };
-
-  const submitJoin = async () => {
-    if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
-    const payload = {
-      match_id: matchId, user_id: user.id,
-      pos_1st: joinForm.pos_1st, pos_2nd: joinForm.pos_2nd, pos_3rd: joinForm.pos_3rd,
-      pos_exclude: joinForm.pos_exclude,
-      available_sets: joinForm.available_sets.join(',')
-    };
-    if (isJoined) await supabase.from('match_participants').update(payload).eq('match_id', matchId).eq('user_id', user.id);
-    else await supabase.from('match_participants').insert([payload]);
-    setShowPositionModal(false);
     fetchMatchDetails();
   };
 
@@ -225,7 +231,15 @@ export default function MatchDetailPage() {
                     <p className="text-sm">{p.profiles?.full_name}</p>
                     <p className="text-[10px] text-gray-400">{p.available_sets}세트 참여</p>
                   </div>
-                  <div className="text-xs font-bold text-sport-blue bg-blue-50 px-2 py-1 rounded-lg">{p.pos_1st}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs font-bold text-sport-blue bg-blue-50 px-2 py-1 rounded-lg">{p.pos_1st}</div>
+                    {/* 마스터 수정 버튼 추가 */}
+                    {isManager && (
+                      <button onClick={() => openEditModal(p)} className="p-1.5 bg-gray-100 rounded-lg text-gray-500 hover:bg-gray-200">
+                        <Settings className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -261,16 +275,18 @@ export default function MatchDetailPage() {
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-[32px] p-6 max-h-[85vh] overflow-y-auto">
-            <h3 className="text-2xl font-black mb-6">참가 신청</h3>
+            <h3 className="text-2xl font-black mb-6">
+              {editingParticipant ? `${editingParticipant.profiles?.full_name}님 수정` : '참가 신청'}
+            </h3>
             <div className="space-y-6">
               <div>
-                <label className="text-sm font-black mb-2 block text-gray-600">참가 가능 세트 (다중 선택)</label>
+                <label className="text-sm font-black mb-2 block text-gray-600">참가 가능 세트</label>
                 <div className="flex flex-wrap gap-2">
                   {["1","2","3","4","5","6","7","8"].map(s => (
                     <button key={s} onClick={() => {
                       const curr = joinForm.available_sets;
                       setJoinForm({...joinForm, available_sets: curr.includes(s) ? curr.filter(v => v !== s) : [...curr, s]});
-                    }} className={`px-4 py-2 rounded-xl font-bold border-2 transition-all ${joinForm.available_sets.includes(s) ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-sm' : 'border-gray-100 bg-white text-gray-400'}`}>{s}세트</button>
+                    }} className={`px-4 py-2 rounded-xl font-bold border-2 transition-all ${joinForm.available_sets.includes(s) ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100 bg-white text-gray-400'}`}>{s}세트</button>
                   ))}
                 </div>
               </div>
@@ -282,37 +298,26 @@ export default function MatchDetailPage() {
                   </select>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-black text-gray-400 ml-1">2순위</label>
-                    <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_2nd} onChange={e => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
-                      {OPTIONAL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-black text-gray-400 ml-1">3순위</label>
-                    <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
-                      {BONUS_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                  </div>
+                  <div><label className="text-xs font-black text-gray-400 ml-1">2순위</label>
+                  <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_2nd} onChange={e => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
+                    {OPTIONAL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select></div>
+                  <div><label className="text-xs font-black text-gray-400 ml-1">3순위</label>
+                  <select className="w-full mt-1 p-4 rounded-2xl border-2 font-bold bg-white" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
+                    {BONUS_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select></div>
                 </div>
               </div>
-              <button onClick={submitJoin} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl active:scale-95 transition-all">신청 완료</button>
+              <button onClick={submitJoin} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black shadow-xl">
+                {editingParticipant ? '수정 완료 (관리자)' : '신청 완료'}
+              </button>
             </div>
           </div>
         </div>
       )}
 
       <div className="fixed bottom-20 left-0 right-0 p-4 max-w-lg mx-auto bg-gradient-to-t from-gray-50 pt-10">
-        <button onClick={() => {
-          if (isJoined) {
-            const my = participants.find(p => p.user_id === user.id);
-            setJoinForm({
-              pos_1st: my.pos_1st, pos_2nd: my.pos_2nd, pos_3rd: my.pos_3rd, pos_exclude: my.pos_exclude || '선택 안함',
-              available_sets: my.available_sets?.split(',') || []
-            });
-          }
-          setShowPositionModal(true);
-        }} className="w-full py-5 rounded-2xl font-black bg-sport-blue text-white shadow-xl active:scale-95 transition-all">
+        <button onClick={() => openEditModal()} className="w-full py-5 rounded-2xl font-black bg-sport-blue text-white shadow-xl">
           {isJoined ? '신청 내용 수정' : '지금 참가 신청하기'}
         </button>
       </div>
