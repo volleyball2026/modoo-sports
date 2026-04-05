@@ -14,7 +14,6 @@ import { ko } from 'date-fns/locale';
 const VOLLEYBALL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백", "상관없음"];
 const REAL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
 const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
-// 3순위 가산점 전용 포지션 제한
 const BONUS_POSITIONS = ["선택 안함", "속공", "레프트백", "센터백", "라이트백"];
 
 const getShortPos = (pos: string) => {
@@ -58,6 +57,12 @@ export default function MatchDetailPage() {
       setUser(currentUser);
 
       if (currentUser) {
+        await supabase.from('profiles').upsert({
+          id: currentUser.id,
+          full_name: currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || '사용자',
+          avatar_url: currentUser.user_metadata?.avatar_url || '',
+        });
+
         const { data: profileData } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
         setUserProfile(profileData);
       }
@@ -91,7 +96,7 @@ export default function MatchDetailPage() {
       alert('매치가 성공적으로 삭제되었습니다.');
       window.location.href = '/'; 
     } catch (error: any) {
-      alert(`❌ 코드 실행 실패: ${error.message}`);
+      alert(`❌ 삭제 실패: ${error.message}`);
     }
   };
 
@@ -125,8 +130,8 @@ export default function MatchDetailPage() {
       
       setShowPositionModal(false);
       fetchMatchDetails();
-    } catch (error) {
-      alert('처리 중 오류가 발생했습니다.');
+    } catch (error: any) {
+      alert(`❌ 신청 실패: ${error.message || '알 수 없는 DB 오류'}`);
     }
   }
 
@@ -162,26 +167,24 @@ export default function MatchDetailPage() {
     }
   };
 
-  // [수정] 프로필 포지션 불러오기 로직 (주 포지션 2개만 불러옴)
   const loadProfilePositions = () => {
     if (!userProfile?.preferred_position) {
       alert('프로필에 설정된 배구 포지션이 없습니다.');
       return;
     }
-    // 프로필에 저장된 2개 포지션 배열 (예: ["세터", "레프트"])
     const posArray = userProfile.preferred_position.split(',');
-    
     setJoinForm({
       ...joinForm,
       pos_1st: posArray[0] || '레프트',
       pos_2nd: posArray[1] || '선택 안함',
-      pos_3rd: '선택 안함' // 3순위는 가산점용이므로 직접 선택하도록 비워둠
+      pos_3rd: '선택 안함'
     });
-    alert('프로필의 주 포지션 2개를 불러왔습니다! 3순위(가산점)를 선택해 보세요.');
+    alert('프로필 정보를 불러왔습니다!');
   };
 
+  // --- 🧠 이 부분의 타입을 강화했습니다 ---
   const generateLineup = async () => {
-    if (!confirm('새로운 라인업을 알고리즘으로 생성하시겠습니까?')) return;
+    if (!confirm('알고리즘으로 라인업을 생성하시겠습니까?')) return;
     
     let basePlayers = [...participants].map(p => {
       let score = getSkillScore(p.profiles?.skill_level);
@@ -203,22 +206,33 @@ export default function MatchDetailPage() {
         let available = [...REAL_POSITIONS];
         let assigned: any[] = [];
 
-        team.forEach(p => {
-          let assignedPos = null;
+        team.forEach((p: any) => {
+          // 👇 로그 207번 줄의 에러를 잡기 위해 타입을 string | null로 확실히 지정했습니다.
+          let assignedPos: string | null = null; 
           const preferences = [p.pos_1st, p.pos_2nd, p.pos_3rd].filter(pos => pos && pos !== '선택 안함' && pos !== '상관없음');
 
-          for (let pref of preferences) {
-            if (available.includes(pref)) { assignedPos = pref; break; }
+          for (const pref of preferences) {
+            if (available.includes(pref)) { 
+              assignedPos = pref; 
+              break; 
+            }
           }
 
           if (!assignedPos) {
             const safeAvailable = available.filter(pos => pos !== p.pos_exclude);
-            if (safeAvailable.length > 0) assignedPos = safeAvailable[Math.floor(Math.random() * safeAvailable.length)];
-            else if (available.length > 0) assignedPos = available[0];
-            else assignedPos = '대기';
+            if (safeAvailable.length > 0) {
+              assignedPos = safeAvailable[Math.floor(Math.random() * safeAvailable.length)];
+            } else if (available.length > 0) {
+              assignedPos = available[0];
+            } else {
+              assignedPos = '대기';
+            }
           }
 
-          if (assignedPos !== '대기') available = available.filter(v => v !== assignedPos);
+          if (assignedPos !== '대기' && assignedPos !== null) {
+            const finalPos = assignedPos;
+            available = available.filter(v => v !== finalPos);
+          }
           assigned.push({ id: p.id, pos: assignedPos });
         });
         return assigned;
@@ -230,7 +244,7 @@ export default function MatchDetailPage() {
         await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id);
       }
     }
-    alert('여순광 배구 알고리즘 라인업 생성 완료!');
+    alert('라인업 생성 완료! 🤖🏐');
     fetchMatchDetails();
   };
 
