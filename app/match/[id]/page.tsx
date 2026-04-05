@@ -17,7 +17,6 @@ const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
 const BONUS_POSITIONS = ["선택 안함", "속공", "레프트백", "센터백", "라이트백"];
 const LEVELS = ["입문", "초급", "중급", "상급", "최상급"];
 
-// 정보 탭용 이름 마스킹 (이희성 -> 이**)
 const maskName = (name: string) => {
   if (!name) return "";
   return name[0] + "*".repeat(Math.max(0, name.length - 1));
@@ -53,7 +52,7 @@ export default function MatchDetailPage() {
   const [isSubmitting, setIsSubmitting] = useState(false); 
   const [editingParticipant, setEditingParticipant] = useState<any>(null); 
   const [joinForm, setJoinForm] = useState({
-    skill_level: '초급', // 실력 레벨 추가
+    skill_level: '초급',
     pos_1st: '레프트', pos_2nd: '선택 안함', pos_3rd: '선택 안함', pos_exclude: '선택 안함',
     available_sets: [] as string[] 
   });
@@ -215,31 +214,27 @@ export default function MatchDetailPage() {
       const targetUserId = editingParticipant ? editingParticipant.user_id : user?.id;
       const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
 
-      // 1. 실력 레벨 업데이트 (profiles 테이블)
       await supabase.from('profiles').update({ skill_level: joinForm.skill_level }).eq('id', targetUserId);
 
-      // 2. 신청 정보 업데이트
       if (targetRecord) {
         const { data, error } = await supabase.from('match_participants').update(payload).eq('id', targetRecord.id).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => prev.map(p => p.id === data[0].id ? data[0] : p));
-        alert('신청 정보가 수정되었습니다.');
+        alert('저장되었습니다.');
       } else {
         const { data, error } = await supabase.from('match_participants').insert([{ ...payload, match_id: matchId, user_id: user.id }]).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => [...prev, data[0]]);
-        alert('참가 신청이 완료되었습니다!');
+        alert('신청이 완료되었습니다!');
       }
       setShowPositionModal(false);
     } catch (e: any) { alert(`오류 발생: ${e.message}`); } finally { setIsSubmitting(false); }
   };
 
-  // --- 🗑️ 참가 취소 함수 추가 ---
   const cancelJoin = async () => {
     const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
     if (!targetRecord) return;
     if (!confirm('정말로 매치 참가를 취소하시겠습니까?')) return;
-
     try {
       setIsSubmitting(true);
       const { error } = await supabase.from('match_participants').delete().eq('id', targetRecord.id);
@@ -284,13 +279,12 @@ export default function MatchDetailPage() {
           if (finalPos !== "대기") remainingPos = remainingPos.filter(v => v !== finalPos);
           if (type === "1st") history1st[p.user_id]++;
           else if (type === "2nd") mileage[p.user_id] += 3;
-          else if (type === "3rd") mileage[p.user_id] += 5;
+          else if (type === "3rd") mileage[p.id] += 5;
           else mileage[p.user_id] += 10;
           results.push({ id: p.id, pos: finalPos });
         });
         return results;
       };
-
       const finalData = [...assign(teamA).map(res => ({ ...res, team: 'A팀' })), ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))];
       for (const res of finalData) { await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id); }
     }
@@ -371,7 +365,6 @@ export default function MatchDetailPage() {
                   <div className="flex-1 font-black">
                     <p className="text-base text-gray-900">{maskName(p.profiles?.full_name)}</p>
                     <p className="text-[10px] text-gray-400 font-bold truncate max-w-[150px]">{sortSets(p.available_sets?.split(',') || []).join(', ')}세트</p>
-                    {/* ✅ 희망 포지션 전체 노출 */}
                     <div className="flex gap-1 mt-1">
                       <span className="text-[8px] bg-blue-50 text-sport-blue px-1.5 py-0.5 rounded border border-blue-100">{p.pos_1st}</span>
                       {p.pos_2nd !== '선택 안함' && <span className="text-[8px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded border border-green-100">{p.pos_2nd}</span>}
@@ -457,17 +450,18 @@ export default function MatchDetailPage() {
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-lg rounded-[48px] p-10 max-h-[85vh] overflow-y-auto shadow-2xl">
             <div className="flex justify-between items-center mb-8">
-              <h3 className="text-2xl font-black text-gray-900">{editingParticipant ? `${editingParticipant.profiles?.full_name}님 정보 수정` : '나의 참가 신청'}</h3>
+              <h3 className="text-2xl font-black text-gray-900">
+                {/* ✅ 제목 동적 변경 */}
+                {editingParticipant ? `${editingParticipant.profiles?.full_name}님 정보 수정` : (isJoined ? '나의 신청 정보 수정' : '나의 참가 신청')}
+              </h3>
               <button onClick={() => setShowPositionModal(false)} className="p-2.5 bg-gray-50 rounded-full text-gray-400"><X /></button>
             </div>
             <div className="space-y-8">
-              {/* ✅ 실력 레벨 수정 섹션 추가 */}
               <div>
                 <label className="text-sm font-black mb-4 block text-gray-600 ml-1">나의 현재 실력 레벨</label>
                 <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-blue-50 border-blue-100 outline-none" value={joinForm.skill_level} onChange={e => setJoinForm({...joinForm, skill_level: e.target.value})}>
                   {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
-                <p className="text-[10px] text-gray-400 mt-2 ml-1">실력에 따라 팀의 전력 밸런스가 자동으로 맞춰집니다. 🏐</p>
               </div>
 
               <div>
@@ -498,10 +492,12 @@ export default function MatchDetailPage() {
 
               <div className="space-y-3 pt-4">
                 <button onClick={submitJoin} disabled={isSubmitting} className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-2xl flex items-center justify-center gap-2 active:scale-95 transition-all">
-                  {isSubmitting ? <Loader2 className="w-6 h-6 animate-spin" /> : '수정 내용 저장하기'}
+                  {isSubmitting ? <Loader2 className="w-6 h-6 animate-spin" /> : (
+                    /* ✅ 버튼 문구 동적 변경 */
+                    (editingParticipant || isJoined) ? '수정 내용 저장하기' : '참가 신청 완료하기'
+                  )}
                 </button>
                 
-                {/* ✅ 참가 취소 버튼 추가 */}
                 {(isJoined || editingParticipant) && (
                   <button onClick={cancelJoin} disabled={isSubmitting} className="w-full py-4 text-red-500 font-black text-base flex items-center justify-center gap-2 hover:bg-red-50 rounded-[24px] transition-colors">
                     <Trash2 className="w-4 h-4" /> 매치 참가 취소하기
