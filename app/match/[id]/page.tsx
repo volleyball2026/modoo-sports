@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { BottomNav } from '@/components/bottom-nav';
 import { 
   ArrowLeft, Calendar, MapPin, Users, Trash2, Edit3, 
-  User, Zap, Eye, EyeOff, X, Download, BarChart3, Clock, Settings, Loader2, Info, ChevronDown, ChevronUp
+  User, Zap, Eye, EyeOff, X, Download, BarChart3, Clock, Settings, Loader2, Info, ChevronDown, ChevronUp, AlertCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -15,6 +15,7 @@ const REAL_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", 
 const VOLLEYBALL_POSITIONS = [...REAL_POSITIONS, "상관없음"];
 const OPTIONAL_POSITIONS = ["선택 안함", ...VOLLEYBALL_POSITIONS];
 const BONUS_POSITIONS = ["선택 안함", "속공", "레프트백", "센터백", "라이트백"];
+const LEVELS = ["입문", "초급", "중급", "상급", "최상급"];
 
 // 정보 탭용 이름 마스킹 (이희성 -> 이**)
 const maskName = (name: string) => {
@@ -22,9 +23,8 @@ const maskName = (name: string) => {
   return name[0] + "*".repeat(Math.max(0, name.length - 1));
 };
 
-// 🛡️ 결정론적 랜덤 변수 생성기 (p.user_id를 활용하여 상시 고유값 유지)
 const getSeedValue = (userId: string, round: number) => {
-  if (!userId) return 0.5; // ID가 없을 경우 중간값
+  if (!userId) return 0.5;
   let hash = 0;
   const str = userId + round;
   for (let i = 0; i < str.length; i++) {
@@ -32,7 +32,6 @@ const getSeedValue = (userId: string, round: number) => {
     hash |= 0;
   }
   const x = Math.sin(hash) * 10000;
-  // 0.01 ~ 0.99 사이의 값을 반환 (0이 나오지 않도록 보정)
   const seed = parseFloat((x - Math.floor(x)).toFixed(2));
   return seed === 0 ? 0.01 : seed;
 };
@@ -48,12 +47,13 @@ export default function MatchDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('info');
   const [activeRound, setActiveRound] = useState(1);
-  const [showAlgoGuide, setShowAlgoGuide] = useState(false); // 가이드 토글
+  const [showAlgoGuide, setShowAlgoGuide] = useState(false);
   
   const [showPositionModal, setShowPositionModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false); 
   const [editingParticipant, setEditingParticipant] = useState<any>(null); 
   const [joinForm, setJoinForm] = useState({
+    skill_level: '초급', // 실력 레벨 추가
     pos_1st: '레프트', pos_2nd: '선택 안함', pos_3rd: '선택 안함', pos_exclude: '선택 안함',
     available_sets: [] as string[] 
   });
@@ -83,15 +83,11 @@ export default function MatchDetailPage() {
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
-  // --- 📊 가중치 실시간 계산 및 변수 노출 ---
   const getPlayerStatsForRound = (player: any, round: number) => {
     const skillMap: any = { '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 };
     const skillScore = skillMap[player.profiles?.skill_level] || 50;
-    
     let penaltyCount = 0;
     let mileage = 0;
-
-    // 이전 라운드 기록으로 가중치 계산
     for (let r = 1; r < round; r++) {
       const assigned = player[`pos_r${r}`];
       if (!assigned) continue;
@@ -101,12 +97,8 @@ export default function MatchDetailPage() {
       else if (assigned === player.pos_2nd) mileage += 3;
       else mileage += 3;
     }
-
-    // ✅ 변수(Seed) 값을 참가자 user_id 기준으로 고정 생성
     const seed = getSeedValue(player.user_id, round); 
-    const baseScore = 100;
-    const finalScore = (baseScore - (penaltyCount * 10) + mileage + seed).toFixed(2);
-    
+    const finalScore = (100 - (penaltyCount * 10) + mileage + seed).toFixed(2);
     return { skillScore, finalScore, penalty: penaltyCount * 10, mileage, seed };
   };
 
@@ -140,15 +132,12 @@ export default function MatchDetailPage() {
             <span className={`text-[9px] px-1.5 py-0.5 rounded font-black text-white ${rankColor}`}>{prefRank}지망</span>
           </div>
           <span className="text-[14px] font-black text-gray-900 leading-tight truncate w-full text-center">{p.profiles?.full_name}</span>
-          
           <div className="w-full flex flex-col items-center mt-1 border-t-2 border-gray-50 pt-2">
-            {/* ✅ 최종 점수를 소수점까지 크게 표시 */}
             <span className="text-[18px] font-black text-gray-900 leading-none mb-1">{finalScore}</span>
             <div className="flex flex-wrap justify-center gap-1">
               <span className="text-[9px] font-bold text-gray-400">기본100</span>
               {penalty > 0 && <span className="text-[9px] font-black text-red-500">-{penalty}</span>}
               {mileage > 0 && <span className="text-[9px] font-black text-blue-500">+{mileage}</span>}
-              {/* ✅ 변수 값을 항상 에메랄드색으로 노출 */}
               <span className="text-[9px] font-black text-emerald-500">+{seed.toFixed(2)}</span>
             </div>
           </div>
@@ -192,6 +181,7 @@ export default function MatchDetailPage() {
     if (participant) {
       setEditingParticipant(participant);
       setJoinForm({
+        skill_level: participant.profiles?.skill_level || '초급',
         pos_1st: participant.pos_1st || '레프트', pos_2nd: participant.pos_2nd || '선택 안함',
         pos_3rd: participant.pos_3rd || '선택 안함', pos_exclude: participant.pos_exclude || '선택 안함',
         available_sets: sortSets(participant.available_sets?.split(',') || [])
@@ -200,9 +190,11 @@ export default function MatchDetailPage() {
       setEditingParticipant(null);
       const myData = participants.find(p => p.user_id === user?.id);
       setJoinForm(myData ? {
+        skill_level: myData.profiles?.skill_level || '초급',
         pos_1st: myData.pos_1st, pos_2nd: myData.pos_2nd, pos_3rd: myData.pos_3rd,
         pos_exclude: myData.pos_exclude || '선택 안함', available_sets: sortSets(myData.available_sets?.split(',') || [])
       } : {
+        skill_level: user?.user_metadata?.skill_level || '초급',
         pos_1st: '레프트', pos_2nd: '선택 안함', pos_3rd: '선택 안함', pos_exclude: '선택 안함',
         available_sets: ["1","2","3","4","5","6","7","8"]
       });
@@ -219,37 +211,57 @@ export default function MatchDetailPage() {
         pos_1st: joinForm.pos_1st, pos_2nd: joinForm.pos_2nd, pos_3rd: joinForm.pos_3rd,
         pos_exclude: joinForm.pos_exclude, available_sets: sortedSets
       };
+
+      const targetUserId = editingParticipant ? editingParticipant.user_id : user?.id;
       const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
+
+      // 1. 실력 레벨 업데이트 (profiles 테이블)
+      await supabase.from('profiles').update({ skill_level: joinForm.skill_level }).eq('id', targetUserId);
+
+      // 2. 신청 정보 업데이트
       if (targetRecord) {
         const { data, error } = await supabase.from('match_participants').update(payload).eq('id', targetRecord.id).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => prev.map(p => p.id === data[0].id ? data[0] : p));
-        alert('성공적으로 저장되었습니다.');
+        alert('신청 정보가 수정되었습니다.');
       } else {
         const { data, error } = await supabase.from('match_participants').insert([{ ...payload, match_id: matchId, user_id: user.id }]).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => [...prev, data[0]]);
-        alert('신청이 완료되었습니다!');
+        alert('참가 신청이 완료되었습니다!');
       }
       setShowPositionModal(false);
     } catch (e: any) { alert(`오류 발생: ${e.message}`); } finally { setIsSubmitting(false); }
   };
 
+  // --- 🗑️ 참가 취소 함수 추가 ---
+  const cancelJoin = async () => {
+    const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
+    if (!targetRecord) return;
+    if (!confirm('정말로 매치 참가를 취소하시겠습니까?')) return;
+
+    try {
+      setIsSubmitting(true);
+      const { error } = await supabase.from('match_participants').delete().eq('id', targetRecord.id);
+      if (error) throw error;
+      setParticipants(prev => prev.filter(p => p.id !== targetRecord.id));
+      alert('참가 신청이 취소되었습니다.');
+      setShowPositionModal(false);
+    } catch (e: any) { alert(`취소 실패: ${e.message}`); } finally { setIsSubmitting(false); }
+  };
+
   const generateLineup = async () => {
-    if (!confirm('공평 배정 알고리즘을 가동할까요?')) return;
+    if (!confirm('알고리즘을 가동할까요?')) return;
     const history1st: Record<string, number> = {};
     const mileage: Record<string, number> = {};
-    participants.forEach(p => { history1st[p.id] = 0; mileage[p.id] = 0; });
+    participants.forEach(p => { history1st[p.user_id] = 0; mileage[p.user_id] = 0; });
     const getSkill = (l: string) => ({ '최상급': 90, '고급': 80, '중급': 70, '초급': 60, '입문': 50 }[l] || 50);
 
     for (let r = 1; r <= 4; r++) {
       const setA = String(r * 2 - 1); const setB = String(r * 2);
-      const pool = participants.filter(p => {
-        const sets = p.available_sets?.split(',') || [];
-        return sets.includes(setA) || sets.includes(setB);
-      }).map(p => {
+      const pool = participants.filter(p => (p.available_sets?.split(',') || []).some((s:string) => s === setA || s === setB)).map(p => {
         const seed = getSeedValue(p.user_id, r);
-        const priorityScore = 100 - ((history1st[p.id] || 0) * 10) + (mileage[p.id] || 0) + seed;
+        const priorityScore = 100 - ((history1st[p.user_id] || 0) * 10) + (mileage[p.user_id] || 0) + seed;
         return { ...p, priorityScore, skillScore: getSkill(p.profiles?.skill_level) };
       });
       if (pool.length < 2) continue;
@@ -270,10 +282,10 @@ export default function MatchDetailPage() {
             type = "random";
           }
           if (finalPos !== "대기") remainingPos = remainingPos.filter(v => v !== finalPos);
-          if (type === "1st") history1st[p.id]++;
-          else if (type === "2nd") mileage[p.id] += 3;
-          else if (type === "3rd") mileage[p.id] += 5;
-          else mileage[p.id] += 10;
+          if (type === "1st") history1st[p.user_id]++;
+          else if (type === "2nd") mileage[p.user_id] += 3;
+          else if (type === "3rd") mileage[p.user_id] += 5;
+          else mileage[p.user_id] += 10;
           results.push({ id: p.id, pos: finalPos });
         });
         return results;
@@ -282,7 +294,7 @@ export default function MatchDetailPage() {
       const finalData = [...assign(teamA).map(res => ({ ...res, team: 'A팀' })), ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))];
       for (const res of finalData) { await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id); }
     }
-    alert('라인업 생성이 완료되었습니다! 🤖'); fetchMatchDetails();
+    alert('라인업 생성 완료!'); fetchMatchDetails();
   };
 
   if (loading) return <div className="p-10 text-center font-bold">데이터 로딩 중...</div>;
@@ -335,8 +347,8 @@ export default function MatchDetailPage() {
                     </div>
                     <p className="text-2xl font-black text-gray-900 mb-1">{stat.count1st}<span className="text-xs text-gray-400 ml-0.5 font-bold">명</span></p>
                     <div className="w-full flex justify-between text-[9px] text-gray-400 font-bold px-1.5">
-                      <span>2지망 <span className="text-gray-600">{stat.count2nd}</span></span>
-                      <span>3지망 <span className="text-gray-600">{stat.count3rd}</span></span>
+                      <span>2지 <span className="text-gray-600">{stat.count2nd}</span></span>
+                      <span>3지 <span className="text-gray-600">{stat.count3rd}</span></span>
                     </div>
                   </div>
                 ))}
@@ -353,16 +365,22 @@ export default function MatchDetailPage() {
               <h3 className="font-black text-lg px-2">신청자 명단 ({participants.length}명)</h3>
               {participants.map((p) => (
                 <div key={p.id} className="flex items-center gap-3 bg-white p-4 rounded-[28px] border shadow-sm">
-                  <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center font-bold text-sport-blue overflow-hidden border">
+                  <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center font-bold text-sport-blue overflow-hidden border shrink-0">
                     {p.profiles?.avatar_url ? <img src={p.profiles.avatar_url} className="w-full h-full object-cover" /> : <User className="w-5 h-5"/>}
                   </div>
                   <div className="flex-1 font-black">
                     <p className="text-base text-gray-900">{maskName(p.profiles?.full_name)}</p>
-                    <p className="text-[10px] text-gray-400 font-bold">{sortSets(p.available_sets?.split(',') || []).join(', ')}세트</p>
+                    <p className="text-[10px] text-gray-400 font-bold truncate max-w-[150px]">{sortSets(p.available_sets?.split(',') || []).join(', ')}세트</p>
+                    {/* ✅ 희망 포지션 전체 노출 */}
+                    <div className="flex gap-1 mt-1">
+                      <span className="text-[8px] bg-blue-50 text-sport-blue px-1.5 py-0.5 rounded border border-blue-100">{p.pos_1st}</span>
+                      {p.pos_2nd !== '선택 안함' && <span className="text-[8px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded border border-green-100">{p.pos_2nd}</span>}
+                      {p.pos_3rd !== '선택 안함' && <span className="text-[8px] bg-orange-50 text-orange-500 px-1.5 py-0.5 rounded border border-orange-100">{p.pos_3rd}</span>}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="text-[11px] font-black text-sport-blue bg-blue-50 px-3 py-2 rounded-xl border border-blue-100">{p.pos_1st}</div>
-                    {isManager && <button onClick={() => openEditModal(p)} className="p-2.5 bg-gray-50 rounded-xl text-gray-400"><Settings className="w-4 h-4"/></button>}
+                    <div className="text-[9px] font-black text-gray-400 bg-gray-50 px-2 py-1 rounded-lg border border-gray-100">{p.profiles?.skill_level}</div>
+                    {(isManager || p.user_id === user?.id) && <button onClick={() => openEditModal(p)} className="p-2.5 bg-gray-50 rounded-xl text-gray-400 hover:text-sport-blue"><Settings className="w-4 h-4"/></button>}
                   </div>
                 </div>
               ))}
@@ -370,7 +388,6 @@ export default function MatchDetailPage() {
           </>
         ) : (
           <div className="space-y-6">
-            {/* 📘 알고리즘 배정방식 가이드 */}
             <div className="bg-white border-2 border-sport-blue/20 rounded-[32px] overflow-hidden shadow-sm">
               <button onClick={() => setShowAlgoGuide(!showAlgoGuide)} className="w-full p-5 flex items-center justify-between bg-blue-50/30 hover:bg-blue-50 transition-colors">
                 <div className="flex items-center gap-3">
@@ -401,7 +418,7 @@ export default function MatchDetailPage() {
 
             <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide px-1">
               {[1, 2, 3, 4].map(r => (
-                <button key={r} onClick={() => setActiveRound(r)} className={`px-7 py-3.5 rounded-full font-black text-sm whitespace-nowrap transition-all border-2 ${activeRound === r ? 'bg-sport-blue border-sport-blue text-white shadow-xl' : 'bg-white border-gray-100 text-gray-400'}`}>
+                <button key={r} onClick={() => setActiveRound(r)} className={`px-7 py-3.5 rounded-full font-black text-sm whitespace-nowrap transition-all border-2 ${activeRound === r ? 'bg-sport-blue border-sport-blue text-white shadow-xl scale-105' : 'bg-white border-gray-100 text-gray-400'}`}>
                   {r*2-1}·{r*2} SET
                 </button>
               ))}
@@ -439,10 +456,22 @@ export default function MatchDetailPage() {
       {showPositionModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-lg rounded-[48px] p-10 max-h-[85vh] overflow-y-auto shadow-2xl">
-            <h3 className="text-2xl font-black mb-8">{editingParticipant ? `${editingParticipant.profiles?.full_name}님 정보 수정` : '매치 참가 신청'}</h3>
+            <div className="flex justify-between items-center mb-8">
+              <h3 className="text-2xl font-black text-gray-900">{editingParticipant ? `${editingParticipant.profiles?.full_name}님 정보 수정` : '나의 참가 신청'}</h3>
+              <button onClick={() => setShowPositionModal(false)} className="p-2.5 bg-gray-50 rounded-full text-gray-400"><X /></button>
+            </div>
             <div className="space-y-8">
+              {/* ✅ 실력 레벨 수정 섹션 추가 */}
               <div>
-                <label className="text-sm font-black mb-4 block text-gray-600">참여 가능한 세트</label>
+                <label className="text-sm font-black mb-4 block text-gray-600 ml-1">나의 현재 실력 레벨</label>
+                <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-blue-50 border-blue-100 outline-none" value={joinForm.skill_level} onChange={e => setJoinForm({...joinForm, skill_level: e.target.value})}>
+                  {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+                <p className="text-[10px] text-gray-400 mt-2 ml-1">실력에 따라 팀의 전력 밸런스가 자동으로 맞춰집니다. 🏐</p>
+              </div>
+
+              <div>
+                <label className="text-sm font-black mb-4 block text-gray-600 ml-1">참여 가능한 세트</label>
                 <div className="grid grid-cols-4 gap-2">
                   {["1","2","3","4","5","6","7","8"].map(s => (
                     <button key={s} onClick={() => {
@@ -453,21 +482,32 @@ export default function MatchDetailPage() {
                 </div>
               </div>
               <div className="space-y-4 pt-2">
-                <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none transition-all" value={joinForm.pos_1st} onChange={e => setJoinForm({...joinForm, pos_1st: e.target.value})}>
+                <label className="text-sm font-black block text-gray-600 ml-1">희망 포지션 (1/2/3순위)</label>
+                <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-gray-50" value={joinForm.pos_1st} onChange={e => setJoinForm({...joinForm, pos_1st: e.target.value})}>
                   {VOLLEYBALL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <div className="grid grid-cols-2 gap-3">
-                  <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none transition-all" value={joinForm.pos_2nd} onChange={e => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
+                  <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-gray-50" value={joinForm.pos_2nd} onChange={e => setJoinForm({...joinForm, pos_2nd: e.target.value})}>
                     {OPTIONAL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
-                  <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none transition-all" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
+                  <select className="w-full p-5 rounded-[24px] border-2 font-black text-gray-700 bg-gray-50" value={joinForm.pos_3rd} onChange={e => setJoinForm({...joinForm, pos_3rd: e.target.value})}>
                     {BONUS_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
               </div>
-              <button onClick={submitJoin} disabled={isSubmitting} className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-2xl flex items-center justify-center gap-2 mt-4 active:scale-95 transition-all">
-                {isSubmitting ? <Loader2 className="w-6 h-6 animate-spin" /> : '설정 저장하기'}
-              </button>
+
+              <div className="space-y-3 pt-4">
+                <button onClick={submitJoin} disabled={isSubmitting} className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-2xl flex items-center justify-center gap-2 active:scale-95 transition-all">
+                  {isSubmitting ? <Loader2 className="w-6 h-6 animate-spin" /> : '수정 내용 저장하기'}
+                </button>
+                
+                {/* ✅ 참가 취소 버튼 추가 */}
+                {(isJoined || editingParticipant) && (
+                  <button onClick={cancelJoin} disabled={isSubmitting} className="w-full py-4 text-red-500 font-black text-base flex items-center justify-center gap-2 hover:bg-red-50 rounded-[24px] transition-colors">
+                    <Trash2 className="w-4 h-4" /> 매치 참가 취소하기
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -475,7 +515,7 @@ export default function MatchDetailPage() {
 
       <div className="fixed bottom-20 left-0 right-0 p-4 max-w-lg mx-auto bg-gradient-to-t from-gray-50 via-gray-50 pt-10 z-10">
         <button onClick={() => openEditModal()} className="w-full py-5 rounded-[32px] font-black text-lg bg-sport-blue text-white shadow-2xl active:scale-95 transition-all">
-          {isJoined ? '나의 신청 내역 수정하기' : '지금 참가 신청하기 🏐'}
+          {isJoined ? '나의 신청 정보 수정/취소' : '지금 참가 신청하기 🏐'}
         </button>
       </div>
       <BottomNav />
