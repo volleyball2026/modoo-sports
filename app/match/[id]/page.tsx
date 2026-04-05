@@ -47,7 +47,7 @@ export default function MatchDetailPage() {
     pos_2nd: '선택 안함',
     pos_3rd: '선택 안함',
     pos_exclude: '선택 안함',
-    available_sets: [] as number[]
+    available_sets: [] as string[] // 숫자가 섞일 수 있어 string으로 통합 관리
   });
 
   const fetchMatchDetails = useCallback(async () => {
@@ -114,7 +114,7 @@ export default function MatchDetailPage() {
         pos_2nd: joinForm.pos_2nd,
         pos_3rd: joinForm.pos_3rd,
         pos_exclude: joinForm.pos_exclude,
-        available_sets: joinForm.available_sets.sort((a,b)=>a-b).join(',')
+        available_sets: joinForm.available_sets.join(',')
       };
 
       if (isJoined) {
@@ -138,8 +138,8 @@ export default function MatchDetailPage() {
   const openJoinModal = () => {
     if (!user) { alert('로그인이 필요합니다.'); router.push('/login'); return; }
 
-    const totalSets = match?.total_sets || 4;
-    const allSets = Array.from({length: totalSets}, (_, i) => i + 1);
+    const maxSets = Math.min(6, match?.total_sets || 4);
+    const initialSets = Array.from({length: maxSets}, (_, i) => String(i + 1));
 
     if (isJoined) {
       const myData = participants.find(p => p.user_id === user.id);
@@ -148,12 +148,12 @@ export default function MatchDetailPage() {
         pos_2nd: myData.pos_2nd || '선택 안함',
         pos_3rd: myData.pos_3rd || '선택 안함',
         pos_exclude: myData.pos_exclude || '선택 안함',
-        available_sets: myData.available_sets ? myData.available_sets.split(',').map(Number) : allSets
+        available_sets: myData.available_sets ? myData.available_sets.split(',') : initialSets
       });
     } else {
       setJoinForm({
         pos_1st: '레프트', pos_2nd: '선택 안함', pos_3rd: '선택 안함', pos_exclude: '선택 안함',
-        available_sets: allSets
+        available_sets: initialSets
       });
     }
     setShowPositionModal(true);
@@ -182,7 +182,6 @@ export default function MatchDetailPage() {
     alert('프로필 정보를 불러왔습니다!');
   };
 
-  // --- 🧠 이 부분의 타입을 강화했습니다 ---
   const generateLineup = async () => {
     if (!confirm('알고리즘으로 라인업을 생성하시겠습니까?')) return;
     
@@ -207,7 +206,7 @@ export default function MatchDetailPage() {
         let assigned: any[] = [];
 
         team.forEach((p: any) => {
-          // 👇 로그 207번 줄의 에러를 잡기 위해 타입을 string | null로 확실히 지정했습니다.
+          // assignedPos의 타입을 명시적으로 지정하여 빌드 에러를 방지합니다.
           let assignedPos: string | null = null; 
           const preferences = [p.pos_1st, p.pos_2nd, p.pos_3rd].filter(pos => pos && pos !== '선택 안함' && pos !== '상관없음');
 
@@ -412,18 +411,30 @@ export default function MatchDetailPage() {
 
             <div className="space-y-5 mb-8">
               <div className="pb-5 border-b border-gray-100">
-                <label className="text-sm font-black text-gray-900 ml-1 flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-sport-blue"/> 참가 가능 세트</label>
+                <label className="text-sm font-black text-gray-900 ml-1 flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-sport-blue"/> 참가 가능 세트 (다중 선택)</label>
                 <div className="flex flex-wrap gap-2">
-                  {Array.from({length: match?.total_sets || 4}, (_, i) => i + 1).map(setNum => {
-                    const isSelected = joinForm.available_sets.includes(setNum);
+                  {/* 1~6세트까지 동적 생성 */}
+                  {Array.from({length: Math.min(6, match?.total_sets || 4)}, (_, i) => String(i + 1)).map(setVal => {
+                    const isSelected = joinForm.available_sets.includes(setVal);
                     return (
-                      <button key={setNum} onClick={() => {
+                      <button key={setVal} onClick={() => {
                         const curr = joinForm.available_sets;
-                        if (isSelected) setJoinForm({...joinForm, available_sets: curr.filter(n => n !== setNum)});
-                        else setJoinForm({...joinForm, available_sets: [...curr, setNum]});
-                      }} className={`px-4 py-2.5 rounded-xl font-bold text-sm border-2 ${isSelected ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100 bg-white text-gray-400'}`}>{setNum}세트</button>
+                        if (isSelected) setJoinForm({...joinForm, available_sets: curr.filter(v => v !== setVal)});
+                        else setJoinForm({...joinForm, available_sets: [...curr, setVal]});
+                      }} className={`px-4 py-2.5 rounded-xl font-bold text-sm border-2 ${isSelected ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-100 bg-white text-gray-400'}`}>
+                        {setVal}세트
+                      </button>
                     );
                   })}
+                  {/* 끝장 세트(추가) 항목 */}
+                  <button onClick={() => {
+                    const curr = joinForm.available_sets;
+                    const isSelected = curr.includes('끝장');
+                    if (isSelected) setJoinForm({...joinForm, available_sets: curr.filter(v => v !== '끝장')});
+                    else setJoinForm({...joinForm, available_sets: [...curr, '끝장']});
+                  }} className={`px-4 py-2.5 rounded-xl font-bold text-sm border-2 ${joinForm.available_sets.includes('끝장') ? 'border-red-400 bg-red-50 text-red-500' : 'border-gray-100 bg-white text-gray-400'}`}>
+                    끝장 세트(추가)
+                  </button>
                 </div>
               </div>
 
