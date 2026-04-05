@@ -43,6 +43,19 @@ export default function MatchDetailPage() {
     available_sets: [] as string[] 
   });
 
+  // ✅ 세트 번호를 안전하게 정렬하는 함수 (타입 명시)
+  const sortSets = (setsArray: string[]) => {
+    return [...setsArray]
+      .filter(Boolean)
+      .sort((a: string, b: string) => {
+        const numA = parseInt(a);
+        const numB = parseInt(b);
+        if (isNaN(numA)) return 1;
+        if (isNaN(numB)) return -1;
+        return numA - numB;
+      });
+  };
+
   const fetchMatchDetails = useCallback(async () => {
     try {
       setLoading(true);
@@ -57,7 +70,6 @@ export default function MatchDetailPage() {
 
   useEffect(() => { fetchMatchDetails(); }, [fetchMatchDetails]);
 
-  // ✅ [수정 포인트] 에러가 났던 isManager 변수를 컴포넌트 최상단에 선언했습니다.
   const isJoined = participants.some((p) => p.user_id === user?.id);
   const isManager = user?.id === match?.manager_id;
 
@@ -106,7 +118,7 @@ export default function MatchDetailPage() {
       const rankColor = prefRank === '1' ? 'bg-blue-500' : prefRank === '2' ? 'bg-green-500' : 'bg-orange-400';
 
       return (
-        <div className={`flex-1 bg-white border ${isA ? 'border-red-200' : 'border-blue-200'} rounded-xl p-1.5 shadow-sm flex flex-col items-center justify-center min-h-[70px] transition-transform active:scale-95`}>
+        <div className={`flex-1 bg-white border ${isA ? 'border-red-200' : 'border-blue-200'} rounded-xl p-1.5 shadow-sm flex flex-col items-center justify-center min-h-[70px]`}>
           <div className="flex items-center gap-1 mb-1">
             <span className="text-[7px] font-black text-gray-400 uppercase tracking-tighter">{posName}</span>
             <span className={`text-[7px] px-1 rounded-sm font-black text-white ${rankColor}`}>{prefRank}</span>
@@ -124,29 +136,16 @@ export default function MatchDetailPage() {
         <div className="flex justify-between items-center px-2">
            <p className={`font-black text-sm uppercase tracking-widest ${textColor}`}>{teamType} COURT</p>
            <div className="flex flex-col items-end">
-             <span className="text-[9px] font-black text-gray-400 mb-1">TEAM POWER: {avgSkill}</span>
-             <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden shadow-inner">
+             <span className="text-[9px] font-black text-gray-400 mb-1">POWER: {avgSkill}</span>
+             <div className="w-16 h-1 bg-gray-100 rounded-full overflow-hidden">
                <div className={`h-full ${isA ? 'bg-red-400' : 'bg-blue-400'}`} style={{ width: `${(avgSkill/90)*100}%` }}></div>
              </div>
            </div>
         </div>
-        
         <div className="space-y-2">
-          <div className="flex gap-2">
-            {renderPlayer('레프트')}
-            {renderPlayer('속공')}
-            {renderPlayer('세터')}
-            {renderPlayer('라이트')}
-          </div>
-          <div className="flex justify-center gap-2 px-8">
-            {renderPlayer('앞차')}
-            {renderPlayer('백차')}
-          </div>
-          <div className="flex gap-2">
-            {renderPlayer('레프트백')}
-            {renderPlayer('센터백')}
-            {renderPlayer('라이트백')}
-          </div>
+          <div className="flex gap-2">{renderPlayer('레프트')}{renderPlayer('속공')}{renderPlayer('세터')}{renderPlayer('라이트')}</div>
+          <div className="flex justify-center gap-2 px-8">{renderPlayer('앞차')}{renderPlayer('백차')}</div>
+          <div className="flex gap-2">{renderPlayer('레프트백')}{renderPlayer('센터백')}{renderPlayer('라이트백')}</div>
         </div>
       </div>
     );
@@ -158,14 +157,14 @@ export default function MatchDetailPage() {
       setJoinForm({
         pos_1st: participant.pos_1st || '레프트', pos_2nd: participant.pos_2nd || '선택 안함',
         pos_3rd: participant.pos_3rd || '선택 안함', pos_exclude: participant.pos_exclude || '선택 안함',
-        available_sets: participant.available_sets?.split(',') || []
+        available_sets: sortSets(participant.available_sets?.split(',') || [])
       });
     } else {
       setEditingParticipant(null);
       const myData = participants.find(p => p.user_id === user?.id);
       setJoinForm(myData ? {
         pos_1st: myData.pos_1st, pos_2nd: myData.pos_2nd, pos_3rd: myData.pos_3rd,
-        pos_exclude: myData.pos_exclude || '선택 안함', available_sets: myData.available_sets?.split(',') || []
+        pos_exclude: myData.pos_exclude || '선택 안함', available_sets: sortSets(myData.available_sets?.split(',') || [])
       } : {
         pos_1st: '레프트', pos_2nd: '선택 안함', pos_3rd: '선택 안함', pos_exclude: '선택 안함',
         available_sets: ["1","2","3","4","5","6","7","8"]
@@ -178,7 +177,7 @@ export default function MatchDetailPage() {
     if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
     try {
       setIsSubmitting(true);
-      const sortedSets = [...joinForm.available_sets].sort((a,b) => parseInt(a) - parseInt(b)).join(',');
+      const sortedSets = sortSets(joinForm.available_sets).join(',');
       const payload = {
         pos_1st: joinForm.pos_1st, pos_2nd: joinForm.pos_2nd, pos_3rd: joinForm.pos_3rd,
         pos_exclude: joinForm.pos_exclude, available_sets: sortedSets
@@ -188,7 +187,7 @@ export default function MatchDetailPage() {
         const { data, error } = await supabase.from('match_participants').update(payload).eq('id', targetRecord.id).select('*, profiles(*)');
         if (error) throw error;
         setParticipants(prev => prev.map(p => p.id === data[0].id ? data[0] : p));
-        alert('성공적으로 저장되었습니다.');
+        alert('저장되었습니다.');
       } else {
         const { data, error } = await supabase.from('match_participants').insert([{ ...payload, match_id: matchId, user_id: user.id }]).select('*, profiles(*)');
         if (error) throw error;
@@ -245,7 +244,7 @@ export default function MatchDetailPage() {
       const finalData = [...assign(teamA).map(res => ({ ...res, team: 'A팀' })), ...assign(teamB).map(res => ({ ...res, team: 'B팀' }))];
       for (const res of finalData) { await supabase.from('match_participants').update({ [`team_r${r}`]: res.team, [`pos_r${r}`]: res.pos }).eq('id', res.id); }
     }
-    alert('4라운드 라인업 생성이 완료되었습니다!'); fetchMatchDetails();
+    alert('라인업 생성이 완료되었습니다!'); fetchMatchDetails();
   };
 
   if (loading) return <div className="p-10 text-center font-bold">로딩 중...</div>;
@@ -281,9 +280,9 @@ export default function MatchDetailPage() {
             <div className="bg-white p-6 rounded-[32px] shadow-sm border font-bold">
                <h2 className="text-2xl font-black mb-4 leading-tight">{match.title}</h2>
                <div className="space-y-1.5 text-sm text-gray-500">
-                 <p className="flex items-center gap-2 font-black"><Calendar className="w-4 h-4 text-sport-blue"/> {match.match_date}</p>
-                 <p className="flex items-center gap-2 font-black"><MapPin className="w-4 h-4 text-sport-blue"/> {match.location}</p>
-                 <p className="flex items-center gap-2 font-black"><Users className="w-4 h-4 text-sport-blue"/> {participants.length}명 신청 완료</p>
+                 <p className="flex items-center gap-2"><Calendar className="w-4 h-4 text-sport-blue"/> {match.match_date}</p>
+                 <p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-sport-blue"/> {match.location}</p>
+                 <p className="flex items-center gap-2"><Users className="w-4 h-4 text-sport-blue"/> {participants.length}명 신청 완료</p>
                </div>
             </div>
             {isManager && (
@@ -300,7 +299,10 @@ export default function MatchDetailPage() {
                   </div>
                   <div className="flex-1 font-black">
                     <p className="text-sm">{p.profiles?.full_name}</p>
-                    <p className="text-[10px] text-gray-400">{p.available_sets?.split(',').sort((a,b)=>parseInt(a)-parseInt(b)).join(', ')}세트</p>
+                    {/* ✅ 타입 에러 수정을 위해 sortSets 도우미 함수 사용 */}
+                    <p className="text-[10px] text-gray-400">
+                      {sortSets(p.available_sets?.split(',') || []).join(', ')}세트
+                    </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-[10px] font-black text-sport-blue bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-100">{p.pos_1st}</div>
@@ -346,7 +348,7 @@ export default function MatchDetailPage() {
                   </div>
                 )}
               </div>
-            ) : <div className="py-24 text-center font-black text-gray-300">라인업이 비공개 상태입니다. 🕵️‍♂️</div>}
+            ) : <div className="py-24 text-center font-black text-gray-300">라인업이 아직 비공개 상태입니다. 🕵️‍♂️</div>}
           </div>
         )}
       </main>
