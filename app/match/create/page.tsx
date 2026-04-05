@@ -4,17 +4,19 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { 
-  ArrowLeft, Plus, Minus, Save, Users, Calendar, MapPin, 
-  ClipboardList, CheckCircle2, LayoutGrid, Loader2 
+  ArrowLeft, Plus, Minus, Users, Calendar, MapPin, 
+  ClipboardList, LayoutGrid, Loader2, Zap, Trophy
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 
-const POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
+const SPORTS = ["배구", "농구", "축구", "배드민턴"];
+const VOLLEY_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
 
 export default function CreateMatchPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [recruitmentType, setRecruitmentType] = useState<'general' | 'position'>('general');
+  const [selectedSport, setSelectedSport] = useState('배구');
+  const [recruitmentType, setRecruitmentType] = useState<'general' | 'position' | 'algorithm'>('algorithm');
   
   const [formData, setFormData] = useState({
     title: '',
@@ -24,9 +26,9 @@ export default function CreateMatchPage() {
     description: ''
   });
 
-  // ✅ 포지션 지정 모집 시 사용할 각 포지션별 정원 상태
+  // 포지션 지정 모집용 T.O 설정
   const [posConfig, setPosConfig] = useState<Record<string, number>>(
-    POSITIONS.reduce((acc, pos) => ({ ...acc, [pos]: 0 }), {})
+    VOLLEY_POSITIONS.reduce((acc, pos) => ({ ...acc, [pos]: 0 }), {})
   );
 
   const handlePosChange = (pos: string, val: number) => {
@@ -41,19 +43,18 @@ export default function CreateMatchPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('로그인이 필요합니다.');
 
-      // 1. 매치 데이터 생성
       const { data, error } = await supabase.from('matches').insert([{
         ...formData,
         manager_id: user.id,
+        sport: selectedSport,
         recruitment_type: recruitmentType,
-        // 포지션 지정 모집일 때만 설정값 저장
         position_settings: recruitmentType === 'position' ? posConfig : null,
         is_lineup_visible: false
       }]).select().single();
 
       if (error) throw error;
       
-      alert('매치가 성공적으로 개설되었습니다! 🏐');
+      alert(`${selectedSport} 매치가 개설되었습니다! 🏐🔥`);
       router.push(`/match/${data.id}`);
     } catch (error: any) {
       alert(`개설 실패: ${error.message}`);
@@ -67,105 +68,82 @@ export default function CreateMatchPage() {
       <header className="bg-white border-b sticky top-0 z-20 flex p-4 max-w-lg mx-auto justify-between items-center font-bold shadow-sm">
         <div className="flex items-center gap-2">
           <button onClick={() => router.back()}><ArrowLeft className="w-5 h-5"/></button>
-          <h1 className="text-lg font-black">새 매치 개설하기</h1>
+          <h1 className="text-lg font-black">매치 개설하기</h1>
         </div>
       </header>
 
       <main className="max-w-lg mx-auto p-4 space-y-6">
         <form onSubmit={handleSubmit} className="space-y-6">
           
-          {/* 1️⃣ 기본 매치 정보 섹션 */}
+          {/* 1️⃣ 종목 선택 섹션 */}
           <section className="bg-white p-6 rounded-[32px] shadow-sm border space-y-4">
             <h3 className="font-black text-sm text-sport-blue flex items-center gap-2 ml-1">
-              <InfoIcon className="w-4 h-4" /> 필수 정보 입력
+              <Trophy className="w-4 h-4" /> 종목 선택
             </h3>
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-black text-gray-400 ml-1">매치 제목</label>
-              <input required className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold transition-all" 
-                placeholder="예: 조례초 화요 배구 픽업"
-                value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} />
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-black text-gray-400 ml-1">일시</label>
-                <input required type="datetime-local" className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold text-sm" 
-                  value={formData.match_date} onChange={e => setFormData({...formData, match_date: e.target.value})} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-black text-gray-400 ml-1">최대 정원</label>
-                <input required type="number" className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold" 
-                  value={formData.max_participants} onChange={e => setFormData({...formData, max_participants: parseInt(e.target.value)})} />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-black text-gray-400 ml-1">장소</label>
-              <div className="relative">
-                <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input required className="w-full p-4 pl-10 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold transition-all" 
-                  placeholder="예: 순천조례초 체육관"
-                  value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
-              </div>
+            <div className="flex flex-wrap gap-2">
+              {SPORTS.map(s => (
+                <button key={s} type="button" onClick={() => setSelectedSport(s)}
+                  className={`px-6 py-3 rounded-2xl font-black text-sm transition-all border-2 ${selectedSport === s ? 'border-sport-blue bg-blue-50 text-sport-blue' : 'border-gray-50 bg-gray-50 text-gray-400'}`}>
+                  {s}
+                </button>
+              ))}
             </div>
           </section>
 
-          {/* 2️⃣ 모집 방식 선택 섹션 */}
+          {/* 2️⃣ 매치 기본 정보 */}
           <section className="bg-white p-6 rounded-[32px] shadow-sm border space-y-4">
-            <h3 className="font-black text-sm text-sport-blue flex items-center gap-2 ml-1">
-              <ClipboardList className="w-4 h-4" /> 모집 방식 상세 설정
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <button type="button" 
-                onClick={() => setRecruitmentType('general')}
-                className={`p-5 rounded-2xl border-2 font-black transition-all flex flex-col items-center gap-2 ${recruitmentType === 'general' ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-md' : 'border-gray-100 bg-white text-gray-300'}`}>
-                <Users className="w-5 h-5" />
-                <span className="text-sm">일반 모집</span>
-              </button>
-              <button type="button" 
-                onClick={() => setRecruitmentType('position')}
-                className={`p-5 rounded-2xl border-2 font-black transition-all flex flex-col items-center gap-2 ${recruitmentType === 'position' ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-md' : 'border-gray-100 bg-white text-gray-300'}`}>
-                <LayoutGrid className="w-5 h-5" />
-                <span className="text-sm">포지션 지정</span>
-              </button>
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-black text-gray-400 ml-1">매치 제목</label>
+              <input required className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold" 
+                placeholder="예: 조례초 배구 픽업" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} />
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input required type="datetime-local" className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold text-sm" 
+                value={formData.match_date} onChange={e => setFormData({...formData, match_date: e.target.value})} />
+              <input required type="number" className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold" 
+                placeholder="정원" value={formData.max_participants} onChange={e => setFormData({...formData, max_participants: parseInt(e.target.value)})} />
+            </div>
+            <input required className="w-full p-4 rounded-2xl border-2 bg-gray-50 focus:bg-white focus:border-sport-blue outline-none font-bold" 
+              placeholder="장소 입력" value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
+          </section>
 
-            {/* 방식별 상세 설명 및 입력 필드 */}
-            {recruitmentType === 'general' ? (
-              <div className="p-5 bg-blue-50/30 rounded-2xl border-2 border-dashed border-blue-100">
-                <p className="text-[12px] font-bold text-gray-500 leading-relaxed">
-                  📢 <span className="text-sport-blue">일반 모집</span>이란?<br/>
-                  - 참가자들은 <span className="text-gray-900 font-black text-xs">'참가 가능 세트'</span>만 선택합니다.<br/>
-                  - 구체적인 포지션 배정은 경기 당일 방장님이 <span className="text-gray-900 font-black text-xs">알고리즘 버튼</span>을 눌러 생성합니다.
-                </p>
+          {/* 3️⃣ 배구 전용 모집 방식 (배구일 때만 노출) */}
+          {selectedSport === '배구' && (
+            <section className="bg-white p-6 rounded-[32px] shadow-sm border space-y-4">
+              <h3 className="font-black text-sm text-sport-blue flex items-center gap-2 ml-1">
+                <ClipboardList className="w-4 h-4" /> 배구 모집 방식 설정
+              </h3>
+              <div className="grid grid-cols-3 gap-2">
+                <RecruitTab active={recruitmentType === 'general'} icon={<Users className="w-4 h-4"/>} label="일반" onClick={() => setRecruitmentType('general')} />
+                <RecruitTab active={recruitmentType === 'position'} icon={<LayoutGrid className="w-4 h-4"/>} label="포지션" onClick={() => setRecruitmentType('position')} />
+                <RecruitTab active={recruitmentType === 'algorithm'} icon={<Zap className="w-4 h-4"/>} label="알고리즘" onClick={() => setRecruitmentType('algorithm')} />
               </div>
-            ) : (
-              <div className="space-y-4 pt-2">
-                <div className="p-4 bg-orange-50/50 rounded-2xl border border-orange-100 mb-2">
-                  <p className="text-[11px] font-bold text-orange-600 leading-relaxed">
-                    📢 <span className="font-black text-xs">포지션 지정 모집</span>이란?<br/>
-                    - 방장님이 포지션별 인원을 미리 정해놓습니다.<br/>
-                    - 참가자는 신청 시 남은 자리(T.O) 중 하나를 선착순으로 선택합니다.
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 gap-2.5">
-                  {POSITIONS.map(pos => (
-                    <div key={pos} className="flex items-center justify-between p-3.5 bg-gray-50 rounded-[20px] border border-gray-100">
-                      <span className="font-black text-sm text-gray-700 ml-2">{pos}</span>
-                      <div className="flex items-center gap-4 bg-white rounded-full px-2 py-1 border shadow-sm">
-                        <button type="button" onClick={() => handlePosChange(pos, posConfig[pos] - 1)} className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"><Minus className="w-4 h-4"/></button>
-                        <span className="font-black text-base min-w-[20px] text-center">{posConfig[pos]}</span>
-                        <button type="button" onClick={() => handlePosChange(pos, posConfig[pos] + 1)} className="w-8 h-8 rounded-full flex items-center justify-center text-sport-blue hover:scale-110 transition-transform"><Plus className="w-4 h-4"/></button>
+
+              <div className="p-4 bg-gray-50 rounded-2xl text-[11px] font-bold text-gray-500 leading-relaxed">
+                {recruitmentType === 'general' && "📢 [일반] 참가자는 참가 세트만 입력합니다."}
+                {recruitmentType === 'position' && "📢 [포지션 지정] 방장이 설정한 포지션 T.O에 선착순 지원합니다."}
+                {recruitmentType === 'algorithm' && "📢 [알고리즘] 참가자의 1~3지망을 받아 최적의 라인업을 생성합니다."}
+              </div>
+
+              {recruitmentType === 'position' && (
+                <div className="grid grid-cols-1 gap-2 pt-2">
+                  {VOLLEY_POSITIONS.map(pos => (
+                    <div key={pos} className="flex items-center justify-between p-3 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                      <span className="font-black text-xs text-gray-600 ml-2">{pos}</span>
+                      <div className="flex items-center gap-3">
+                        <button type="button" onClick={() => handlePosChange(pos, posConfig[pos] - 1)} className="p-1 text-gray-300"><Minus className="w-4 h-4"/></button>
+                        <span className="font-black text-sm w-4 text-center">{posConfig[pos]}</span>
+                        <button type="button" onClick={() => handlePosChange(pos, posConfig[pos] + 1)} className="p-1 text-sport-blue"><Plus className="w-4 h-4"/></button>
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
-          </section>
+              )}
+            </section>
+          )}
 
-          <button disabled={loading} type="submit" className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-2xl flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50">
-            {loading ? <Loader2 className="animate-spin w-6 h-6" /> : '새로운 매치 개설하기 🏐'}
+          <button disabled={loading} type="submit" className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all">
+            {loading ? <Loader2 className="animate-spin w-6 h-6" /> : '매치 개설 완료하기'}
           </button>
         </form>
       </main>
@@ -174,8 +152,12 @@ export default function CreateMatchPage() {
   );
 }
 
-const InfoIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-  </svg>
-);
+function RecruitTab({ active, icon, label, onClick }: any) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`py-4 rounded-2xl border-2 flex flex-col items-center gap-1.5 transition-all ${active ? 'border-sport-blue bg-blue-50 text-sport-blue shadow-sm' : 'border-gray-50 bg-white text-gray-300'}`}>
+      {icon}
+      <span className="text-[10px] font-black">{label}</span>
+    </button>
+  );
+}
