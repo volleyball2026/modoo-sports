@@ -43,11 +43,8 @@ export default function MatchDetailPage() {
       setLoading(true);
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       setUser(currentUser);
-      
       const { data: matchData } = await supabase.from('matches').select('*').eq('id', matchId).single();
       setMatch(matchData);
-      
-      // profiles 정보를 포함해서 참가자 명단을 가져옵니다.
       const { data: partData } = await supabase.from('match_participants').select('*, profiles(*)').eq('match_id', matchId);
       setParticipants(partData || []);
     } catch (error) { console.error(error); } finally { setLoading(false); }
@@ -87,7 +84,7 @@ export default function MatchDetailPage() {
     setShowPositionModal(true);
   };
 
-  // --- 💾 저장 및 실시간 반영 로직 ---
+  // --- 💾 [수정됨] 에러 방지용 저장 로직 ---
   const submitJoin = async () => {
     if (joinForm.available_sets.length === 0) return alert('세트를 선택해주세요.');
     
@@ -104,35 +101,37 @@ export default function MatchDetailPage() {
       const targetRecord = editingParticipant || participants.find(p => p.user_id === user?.id);
 
       if (targetRecord) {
-        // [수정] update 후 최신 데이터를 다시 불러오도록 .select() 추가
-        const { data: updatedData, error } = await supabase.from('match_participants')
+        // [핵심 해결] .single()을 제거하고 배열로 처리하여 에러를 막습니다.
+        const { data: updatedResults, error } = await supabase.from('match_participants')
           .update(payload)
           .eq('id', targetRecord.id)
-          .select('*, profiles(*)')
-          .single();
+          .select('*, profiles(*)');
         
         if (error) throw error;
 
-        // [핵심] 로컬 상태 즉시 업데이트 (새로고침 없이 반영)
+        // 실제 수정된 데이터가 없을 경우 (주로 RLS 권한 문제)
+        if (!updatedResults || updatedResults.length === 0) {
+          throw new Error("수정 권한이 없거나 대상을 찾을 수 없습니다. Supabase 정책(RLS)을 확인해 주세요.");
+        }
+
+        const updatedData = updatedResults[0];
         setParticipants(prev => prev.map(p => p.id === updatedData.id ? updatedData : p));
-        alert(editingParticipant ? `${updatedData.profiles?.full_name}님의 정보가 수정되었습니다!` : '수정 완료!');
+        alert(editingParticipant ? `${updatedData.profiles?.full_name}님의 정보가 수정되었습니다!` : '정보가 수정되었습니다!');
       } else {
-        // [입력] 신규 신청
-        const { data: newData, error } = await supabase.from('match_participants').insert([{
-          ...payload,
-          match_id: matchId,
-          user_id: user.id
-        }]).select('*, profiles(*)').single();
+        const { data: newResults, error } = await supabase.from('match_participants')
+          .insert([{ ...payload, match_id: matchId, user_id: user.id }])
+          .select('*, profiles(*)');
         
         if (error) throw error;
-        setParticipants(prev => [...prev, newData]);
-        alert('신청이 완료되었습니다!');
+        if (newResults && newResults.length > 0) {
+          setParticipants(prev => [...prev, newResults[0]]);
+          alert('참가 신청이 완료되었습니다!');
+        }
       }
-
       setShowPositionModal(false);
     } catch (e: any) {
       alert(`❌ 오류 발생: ${e.message}`);
-      console.error(e);
+      console.error('Save Error:', e);
     } finally {
       setIsSubmitting(false);
     }
@@ -202,7 +201,7 @@ export default function MatchDetailPage() {
               {match.is_lineup_visible ? <EyeOff /> : <Eye className="text-sport-blue"/>}
             </button>
             <button onClick={() => router.push(`/match/${matchId}/edit`)}><Edit3 /></button>
-            <button onClick={() => { if(confirm('매치를 삭제하시겠습니까?')) supabase.from('matches').delete().eq('id', matchId).then(() => router.push('/')) }}><Trash2 className="text-red-500" /></button>
+            <button onClick={() => { if(confirm('삭제?')) supabase.from('matches').delete().eq('id', matchId).then(() => router.push('/')) }}><Trash2 className="text-red-500" /></button>
           </div>
         )}
       </header>
@@ -311,7 +310,7 @@ export default function MatchDetailPage() {
 
               <div className="space-y-5">
                 <div className="space-y-2">
-                  <label className="text-xs font-black text-gray-400 ml-2 uppercase">1순위 선호 포지션 (필수)</label>
+                  <label className="text-xs font-black text-gray-400 ml-2 uppercase">1순위 선호 포지션</label>
                   <select className="w-full p-4 rounded-2xl border-2 border-gray-50 bg-gray-50 font-black outline-none focus:border-sport-blue focus:bg-white transition-all appearance-none" value={joinForm.pos_1st} onChange={e => setJoinForm({...joinForm, pos_1st: e.target.value})}>
                     {VOLLEYBALL_POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
