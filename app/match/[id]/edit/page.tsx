@@ -1,168 +1,125 @@
+// app/match/[id]/edit/page.tsx 전체 코드
 'use client';
 
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Plus, Minus, LayoutGrid } from 'lucide-react';
+import { BottomNav } from '@/components/bottom-nav';
+
+const VOLLEY_POSITIONS = ["레프트", "속공", "세터", "라이트", "앞차", "백차", "레프트백", "센터백", "라이트백"];
 
 export default function EditMatchPage() {
   const router = useRouter();
-  const params = useParams();
-  const matchId = params.id;
-
+  const { id } = useParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  
-  // 폼 상태 관리
-  const [title, setTitle] = useState('');
-  const [matchDate, setMatchDate] = useState('');
-  const [location, setLocation] = useState('');
-  const [maxParticipants, setMaxParticipants] = useState(18);
-  const [recruitmentType, setRecruitmentType] = useState('선착순');
+  const [formData, setFormData] = useState<any>({});
+  const [posConfig, setPosConfig] = useState<Record<string, number>>({});
 
-  // 1. 기존 매치 데이터 불러오기
   useEffect(() => {
-    async function loadMatch() {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        const { data: match, error } = await supabase
-          .from('matches')
-          .select('*')
-          .eq('id', matchId)
-          .single();
-
-        if (error || !match) throw new Error('매치를 찾을 수 없습니다.');
-        
-        // 방장 권한 확인
-        if (match.manager_id !== user?.id) {
-          alert('수정 권한이 없습니다.');
-          router.push(`/match/${matchId}`);
-          return;
-        }
-
-        setTitle(match.title);
-        // datetime-local 입력을 위해 초 단위 제거 (YYYY-MM-DDTHH:mm)
-        setMatchDate(new Date(match.match_date).toISOString().slice(0, 16));
-        setLocation(match.location);
-        setMaxParticipants(match.max_participants);
-        setRecruitmentType(match.recruitment_type);
-      } catch (err) {
-        alert('데이터를 불러오지 못했습니다.');
-        router.back();
-      } finally {
-        setLoading(false);
+    const fetchMatch = async () => {
+      const { data } = await supabase.from('matches').select('*').eq('id', id).single();
+      if (data) {
+        setFormData({
+          ...data,
+          match_date: data.match_date ? data.match_date.substring(0, 16) : ''
+        });
+        // ✅ 포지션 설정 로드 (없으면 초기화)
+        setPosConfig(data.position_settings || VOLLEY_POSITIONS.reduce((acc, pos) => ({ ...acc, [pos]: 0 }), {}));
       }
-    }
-    loadMatch();
-  }, [matchId, router]);
+      setLoading(false);
+    };
+    fetchMatch();
+  }, [id]);
 
-  // 2. 수정 사항 저장하기
+  const handlePosChange = (pos: string, val: number) => {
+    setPosConfig(prev => ({ ...prev, [pos]: Math.max(0, val) }));
+  };
+
+  // ✅ ✅ 방식이 'position' 이거나 '선착순'일 때 모두 포지션 지정형으로 판단
+  const isPosType = formData.recruitment_type === 'position' || formData.recruitment_type === '선착순';
+
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-
     try {
-      const { error } = await supabase
-        .from('matches')
-        .update({
-          title,
-          match_date: new Date(matchDate).toISOString(),
-          location,
-          max_participants: maxParticipants,
-          recruitment_type: recruitmentType,
-        })
-        .eq('id', matchId);
+      const { error } = await supabase.from('matches').update({
+        title: formData.title,
+        match_date: new Date(formData.match_date).toISOString(),
+        location: formData.location,
+        max_participants: formData.max_participants,
+        // 포지션 지정형일 때만 T.O 저장
+        position_settings: isPosType ? posConfig : null
+      }).eq('id', id);
 
       if (error) throw error;
-
-      alert('매치 수정이 완료되었습니다! 🏐');
-      router.push(`/match/${matchId}`);
-      router.refresh();
-    } catch (error) {
-      alert('수정 중 오류가 발생했습니다.');
-    } finally {
-      setSaving(false);
-    }
+      alert('매치 정보가 수정되었습니다! 🏐');
+      router.push(`/match/${id}`);
+    } catch (e: any) { alert(`실패: ${e.message}`); } finally { setSaving(false); }
   };
 
-  if (loading) return <div className="p-10 text-center font-bold text-sport-blue">정보 불러오는 중...</div>;
+  if (loading) return <div className="p-10 text-center font-black">로딩 중...</div>;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
-      <header className="bg-white border-b sticky top-0 z-20 flex p-4 max-w-lg mx-auto items-center gap-4">
+    <div className="min-h-screen bg-gray-50 pb-32">
+      <header className="bg-white border-b sticky top-0 z-20 flex p-4 max-w-lg mx-auto justify-between items-center">
         <button onClick={() => router.back()}><ArrowLeft /></button>
-        <h1 className="font-bold text-lg">매치 정보 수정</h1>
+        <h1 className="text-lg font-black">매치 정보 수정</h1>
+        <div className="w-5" />
       </header>
 
-      <main className="max-w-lg mx-auto p-6">
+      <main className="max-w-lg mx-auto p-4 space-y-6">
         <form onSubmit={handleUpdate} className="space-y-6">
-          <div className="space-y-2">
-            <label className="text-sm font-black text-gray-500 ml-1">매치 제목</label>
-            <input
-              required
-              className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="예: 금요 야간 배구 픽업게임"
-            />
-          </div>
+          <section className="bg-white p-6 rounded-[32px] border shadow-sm space-y-4">
+             {/* 기본 정보 필드들 (생략 - 기존과 동일) */}
+             <div className="space-y-1.5">
+               <label className="text-[11px] font-black text-gray-400">매치 제목</label>
+               <input className="w-full p-4 rounded-2xl border-2 bg-gray-50 font-bold" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} />
+             </div>
+             <div className="space-y-1.5">
+               <label className="text-[11px] font-black text-gray-400">일시</label>
+               <input type="datetime-local" className="w-full p-4 rounded-2xl border-2 bg-gray-50 font-bold" value={formData.match_date} onChange={e => setFormData({...formData, match_date: e.target.value})} />
+             </div>
+             <div className="grid grid-cols-2 gap-3">
+               <div className="space-y-1.5">
+                 <label className="text-[11px] font-black text-gray-400">모집 인원</label>
+                 <input type="number" className="w-full p-4 rounded-2xl border-2 bg-gray-50 font-bold" value={formData.max_participants} onChange={e => setFormData({...formData, max_participants: e.target.value})} />
+               </div>
+               <div className="space-y-1.5">
+                 <label className="text-[11px] font-black text-gray-400">모집 방식</label>
+                 <div className="w-full p-4 rounded-2xl border-2 bg-gray-100 font-bold text-gray-400 select-none">{formData.recruitment_type}</div>
+               </div>
+             </div>
+          </section>
 
-          <div className="space-y-2">
-            <label className="text-sm font-black text-gray-500 ml-1">일시</label>
-            <input
-              required
-              type="datetime-local"
-              className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
-              value={matchDate}
-              onChange={(e) => setMatchDate(e.target.value)}
-            />
-          </div>
+          {/* ✅ ✅ ✅ 포지션 T.O 수정 섹션 (스샷2 문제 해결) */}
+          {isPosType && (
+            <section className="bg-white p-6 rounded-[32px] border shadow-sm space-y-4">
+              <h3 className="font-black text-sm text-sport-blue flex items-center gap-2 ml-1">
+                <LayoutGrid className="w-4 h-4" /> 포지션별 모집 인원(T.O) 수정
+              </h3>
+              <div className="grid grid-cols-1 gap-2.5">
+                {VOLLEY_POSITIONS.map(pos => (
+                  <div key={pos} className="flex items-center justify-between p-3.5 bg-gray-50 rounded-[20px] border border-gray-100">
+                    <span className="font-black text-sm text-gray-700 ml-2">{pos}</span>
+                    <div className="flex items-center gap-4 bg-white rounded-full px-2 py-1 border shadow-sm">
+                      <button type="button" onClick={() => handlePosChange(pos, (posConfig[pos] || 0) - 1)} className="p-1 text-gray-300 hover:text-red-500"><Minus className="w-4 h-4"/></button>
+                      <span className="font-black text-sm min-w-[20px] text-center">{posConfig[pos] || 0}</span>
+                      <button type="button" onClick={() => handlePosChange(pos, (posConfig[pos] || 0) + 1)} className="p-1 text-sport-blue hover:scale-110"><Plus className="w-4 h-4"/></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
-          <div className="space-y-2">
-            <label className="text-sm font-black text-gray-500 ml-1">장소</label>
-            <input
-              required
-              className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              placeholder="체육관 이름을 입력하세요"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-black text-gray-500 ml-1">모집 인원</label>
-              <input
-                required
-                type="number"
-                className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold"
-                value={maxParticipants}
-                onChange={(e) => setMaxParticipants(Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-black text-gray-500 ml-1">방식</label>
-              <select
-                className="w-full p-4 rounded-2xl border-2 border-gray-100 focus:border-sport-blue outline-none transition-all font-bold appearance-none bg-white"
-                value={recruitmentType}
-                onChange={(e) => setRecruitmentType(e.target.value)}
-              >
-                <option value="선착순">선착순</option>
-                <option value="알고리즘">알고리즘 (포지션)</option>
-              </select>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="w-full py-5 bg-sport-blue text-white rounded-2xl font-black text-xl shadow-xl flex items-center justify-center gap-2 mt-8 disabled:bg-gray-300"
-          >
-            {saving ? <Loader2 className="animate-spin" /> : <Save />}
-            수정 내용 저장하기
+          <button disabled={saving} type="submit" className="w-full py-5 bg-gray-900 text-white rounded-[28px] font-black text-xl shadow-xl flex items-center justify-center gap-2">
+            {saving ? <Loader2 className="animate-spin" /> : '수정 내용 저장하기'}
           </button>
         </form>
       </main>
+      <BottomNav />
     </div>
   );
 }
