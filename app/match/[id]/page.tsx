@@ -162,7 +162,7 @@ export default function MatchDetailPage() {
         const priorityScore = 100 - ((history1st[p.id] || 0) * 10) + (mileage[p.id] || 0) + Math.random();
         return { ...p, priorityScore, skillScore: getSkillScore(p.profiles?.skill_level) };
       });
-      if (pool.length < 6) continue;
+      if (pool.length < 2) continue;
       const sortedBySkill = [...pool].sort((a, b) => b.skillScore - a.skillScore);
       const teamA: any[] = []; const teamB: any[] = [];
       sortedBySkill.forEach((p, idx) => { if (idx % 4 === 0 || idx % 4 === 3) teamA.push(p); else teamB.push(p); });
