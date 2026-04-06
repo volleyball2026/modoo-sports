@@ -19,14 +19,25 @@ export default function HomePage() {
   async function fetchMatches() {
     try {
       setLoading(true);
+      // ✅ 매치 정보와 함께 참가자 명수(count)를 효율적으로 가져옵니다.
       const { data, error } = await supabase
         .from('matches')
-        .select('*')
+        .select(`
+          *,
+          match_participants(count)
+        `)
         .order('match_date', { ascending: true });
 
       if (error) throw error;
-      setMatches(data || []);
-      setFilteredMatches(data || []);
+
+      // 가공하여 신청 인원을 match 객체에 포함시킵니다.
+      const processedMatches = data.map(match => ({
+        ...match,
+        current_participants: match.match_participants?.[0]?.count || 0
+      }));
+
+      setMatches(processedMatches);
+      setFilteredMatches(processedMatches);
     } catch (error) {
       console.error('매치 불러오기 실패:', error);
     } finally {
@@ -42,7 +53,7 @@ export default function HomePage() {
     if (selectedSport === '전체') {
       setFilteredMatches(matches);
     } else {
-      setFilteredMatches(matches.filter(m => m.sport === selectedSport));
+      setFilteredMatches(matches.filter(m => (m.sport === selectedSport || m.sport_type === selectedSport)));
     }
   }, [selectedSport, matches]);
 
@@ -58,7 +69,7 @@ export default function HomePage() {
           <button
             onClick={() => setSelectedSport('전체')}
             className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all ${
-              selectedSport === '전체' ? 'bg-sport-blue text-white shadow-md' : 'bg-gray-100 text-gray-500'
+              selectedSport === '전체' ? 'bg-sport-blue text-white shadow-md' : 'bg-gray-100 text-gray-50'
             }`}
           >
             전체
@@ -94,14 +105,18 @@ export default function HomePage() {
             {filteredMatches.map((match) => (
               <Link key={match.id} href={`/match/${match.id}`} className="block group">
                 <div className="bg-white p-6 rounded-[32px] border border-gray-100 shadow-sm group-active:scale-[0.98] transition-all space-y-3">
-                  {/* ✅ 종목 마크 및 뱃지 상단 고정 (수정된 부분) */}
                   <div className="flex justify-between items-start">
                     <div className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100">
-                      <span className="text-sm">{match.sport === '배구' ? '🏐' : '🏆'}</span>
-                      <span className="text-[11px] font-black text-sport-blue uppercase">{match.sport || '배구'}</span>
+                      <span className="text-sm">{match.sport === '배구' || match.sport_type === '배구' ? '🏐' : '🏆'}</span>
+                      <span className="text-[11px] font-black text-sport-blue uppercase">{match.sport || match.sport_type || '배구'}</span>
                     </div>
-                    <span className="px-3 py-1 bg-green-50 text-sport-green text-[10px] font-black rounded-full border border-green-100">
-                      모집 중
+                    {/* ✅ 신청 현황 뱃지 강화 */}
+                    <span className={`px-3 py-1 text-[10px] font-black rounded-full border ${
+                      match.current_participants >= match.max_participants 
+                      ? 'bg-red-50 text-red-500 border-red-100' 
+                      : 'bg-green-50 text-green-600 border-green-100'
+                    }`}>
+                      {match.current_participants >= match.max_participants ? '모집 마감' : '모집 중'}
                     </span>
                   </div>
                   
@@ -116,9 +131,10 @@ export default function HomePage() {
                       <MapPin className="w-3.5 h-3.5 text-sport-blue" />
                       <span className="truncate">{match.location}</span>
                     </p>
+                    {/* ✅ 실시간 신청 인원 노출 부분 */}
                     <p className="flex items-center gap-2">
                       <Users className="w-3.5 h-3.5 text-sport-blue" />
-                      정원 {match.max_participants}명
+                      신청 현황: <span className="text-gray-900 font-black">{match.current_participants}</span> / {match.max_participants}명
                     </p>
                   </div>
                 </div>
